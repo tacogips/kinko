@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refresh GitHub Token to Kinko"
+  short_description: "Refresh gh token scope and sync it to kinko"
+  default_prompt: "Use $refresh-github-token-to-kinko to refresh GitHub auth token scope and re-register GITHUB_TOKEN into kinko shared secrets."
