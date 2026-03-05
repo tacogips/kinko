@@ -14,5 +14,8 @@ The agent will:
 
 Security requirement:
 - Never include credential information, secret values, or local environment variable values in commit messages.
+- Never include development machine-specific paths or absolute local filesystem paths in commit messages (use repository-relative paths only).
+- Never include content from Git-untracked files, and never include paths of Git-untracked files, in commit messages.
+- Public storage URIs/paths (for example S3 public objects) are allowed only when explicitly public and required for context.
 
 Do not ask for confirmation - proceed directly with the commit.
