@@ -15,8 +15,10 @@ func runDirenvExport(opts globalOptions, args []string, stdin io.Reader, stdout,
 	fs.SetOutput(io.Discard)
 
 	withScopeComments := true
+	sharedOnly := false
 	rawExcludeKeys := stringListFlag{}
 	fs.BoolVar(&withScopeComments, "with-scope-comments", true, "include # kinko:scope markers in export output")
+	fs.BoolVar(&sharedOnly, "shared-only", false, "export only shared scope keys")
 	fs.Var(&rawExcludeKeys, "exclude", "comma-separated key denylist to omit from export output (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -43,6 +45,7 @@ func runDirenvExport(opts globalOptions, args []string, stdin io.Reader, stdout,
 	parseArgs := []string{
 		shell,
 		"--with-scope-comments=" + strconv.FormatBool(withScopeComments),
+		"--shared-only=" + strconv.FormatBool(sharedOnly),
 	}
 	for _, v := range rawExcludeKeys {
 		parseArgs = append(parseArgs, "--exclude", v)

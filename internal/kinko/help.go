@@ -354,10 +354,12 @@ TTY constraint:
 		RunE: passthroughHelp,
 		Example: `  kinko export
   kinko export bash
+  kinko export bash --shared-only
   kinko export fish --exclude API_KEY
   kinko export nu --with-scope-comments=false`,
 	}
 	cmd.Flags().Bool("with-scope-comments", true, "Include # kinko:scope markers")
+	cmd.Flags().Bool("shared-only", false, "Export only shared scope keys")
 	cmd.Flags().StringSlice("exclude", nil, "Comma-separated key denylist to omit (repeatable)")
 	return cmd
 }
@@ -428,9 +430,11 @@ Behavior:
 		Args: cobra.ArbitraryArgs,
 		RunE: passthroughHelp,
 		Example: `  eval "$(kinko direnv export)"
+  eval "$(kinko direnv export --shared-only)"
   eval "$(kinko direnv export bash --exclude AWS_SECRET_ACCESS_KEY)"`,
 	}
 	exportCmd.Flags().Bool("with-scope-comments", true, "Include # kinko:scope markers")
+	exportCmd.Flags().Bool("shared-only", false, "Export only shared scope keys")
 	exportCmd.Flags().StringSlice("exclude", nil, "Comma-separated key denylist to omit (repeatable)")
 
 	root.AddCommand(exportCmd)

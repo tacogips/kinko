@@ -105,6 +105,9 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		opts := setupUnlockedForSet(t)
 		base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
 
+		if err := Run(append(base, "set", "--shared", "SHARED_ONLY=shared"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			t.Fatalf("set shared failed: %v", err)
+		}
 		if err := Run(append(base, "set", "IMPORT_ME=hello"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 			t.Fatalf("set failed: %v", err)
 		}
@@ -115,6 +118,17 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 		if !strings.Contains(exported.String(), "IMPORT_ME") {
 			t.Fatalf("unexpected export output: %q", exported.String())
+		}
+
+		var sharedOnly bytes.Buffer
+		if err := Run(append(base, "export", "bash", "--shared-only", "--force"), strings.NewReader(""), &sharedOnly, &bytes.Buffer{}); err != nil {
+			t.Fatalf("shared-only export failed: %v", err)
+		}
+		if !strings.Contains(sharedOnly.String(), "SHARED_ONLY") {
+			t.Fatalf("shared-only export missing shared key: %q", sharedOnly.String())
+		}
+		if strings.Contains(sharedOnly.String(), "IMPORT_ME") {
+			t.Fatalf("shared-only export unexpectedly contains repo key: %q", sharedOnly.String())
 		}
 
 		dst := setupUnlockedForSet(t)
@@ -161,6 +175,14 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 		if !strings.Contains(out.String(), "export DIRENV_KEY='ok'") {
 			t.Fatalf("unexpected direnv export output: %q", out.String())
+		}
+
+		var shellOut bytes.Buffer
+		if err := Run([]string{"--kinko-dir", opts.dataDir, "--path", filepath.Join(t.TempDir(), "other"), "--profile", opts.profile, "direnv", "export", "bash"}, strings.NewReader(""), &shellOut, &bytes.Buffer{}); err != nil {
+			t.Fatalf("direnv export bash failed: %v", err)
+		}
+		if !strings.Contains(shellOut.String(), "export DIRENV_KEY='ok'") {
+			t.Fatalf("unexpected direnv export bash output: %q", shellOut.String())
 		}
 	})
 

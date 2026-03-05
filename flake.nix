@@ -59,11 +59,15 @@
 
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
+            direnv
             go
             gopls
             gotools
             golangci-lint
             go-task
+            bashInteractive
+            zsh
+            fish
           ];
 
           shellHook = ''

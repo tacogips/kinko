@@ -300,6 +300,7 @@ func newConfigCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 
 func newExportCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
 	withScopeComments := true
+	sharedOnly := false
 	exclude := []string{}
 	cmd := &cobra.Command{
 		Use:   cmdExport + " [shell]",
@@ -314,6 +315,7 @@ func newExportCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 				parseArgs = append(parseArgs, args[0])
 			}
 			parseArgs = append(parseArgs, "--with-scope-comments="+strconv.FormatBool(withScopeComments))
+			parseArgs = append(parseArgs, "--shared-only="+strconv.FormatBool(sharedOnly))
 			for _, v := range exclude {
 				parseArgs = append(parseArgs, "--exclude", v)
 			}
@@ -321,6 +323,7 @@ func newExportCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 		},
 	}
 	cmd.Flags().BoolVar(&withScopeComments, "with-scope-comments", true, "include scope comments")
+	cmd.Flags().BoolVar(&sharedOnly, "shared-only", false, "export only shared scope keys")
 	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated key denylist")
 	return cmd
 }
@@ -407,6 +410,7 @@ func newDirenvCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 	}
 
 	withScopeComments := true
+	sharedOnly := false
 	exclude := []string{}
 	exportCmd := &cobra.Command{
 		Use:   cmdExport + " [shell]",
@@ -417,17 +421,19 @@ func newDirenvCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 				return err
 			}
 			parseArgs := []string{}
-			if len(args) == 1 {
-				parseArgs = append(parseArgs, args[0])
-			}
 			parseArgs = append(parseArgs, "--with-scope-comments="+strconv.FormatBool(withScopeComments))
+			parseArgs = append(parseArgs, "--shared-only="+strconv.FormatBool(sharedOnly))
 			for _, v := range exclude {
 				parseArgs = append(parseArgs, "--exclude", v)
+			}
+			if len(args) == 1 {
+				parseArgs = append(parseArgs, args[0])
 			}
 			return runDirenvExport(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	exportCmd.Flags().BoolVar(&withScopeComments, "with-scope-comments", true, "include scope comments")
+	exportCmd.Flags().BoolVar(&sharedOnly, "shared-only", false, "export only shared scope keys")
 	exportCmd.Flags().StringSliceVar(&exclude, "exclude", nil, "comma-separated key denylist")
 	root.AddCommand(exportCmd)
 	return root

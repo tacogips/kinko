@@ -195,8 +195,8 @@ tasks:
         mkdir -p "$E2E_KINKO_DIR" "$E2E_CONFIG_DIR"
         mkdir -p "$E2E_LOG_DIR"
 
-        # 1) not initialized hint
-        go run {{.CMD_PATH}} --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" 2>&1 | rg 'not initialized'
+        # 1) no-arg invocation shows help
+        go run {{.CMD_PATH}} --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" 2>&1 | rg '^Usage:'
 
         # 2) init with password confirmation
         printf "%s\n%s\n" "$KINKO_DEV_E2E_PASSWORD" "$KINKO_DEV_E2E_PASSWORD" | go run {{.CMD_PATH}} --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false init >"$E2E_LOG_DIR/init.out" 2>/dev/null
@@ -320,8 +320,8 @@ tasks:
         printf "%s\ny\n%s\n" "$KINKO_DEV_E2E_PASSWORD" "$EXPLOSION_TOKEN" | go run {{.CMD_PATH}} --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" explosion >"$E2E_LOG_DIR/explosion-ok.out" 2>"$E2E_LOG_DIR/explosion-ok.err"
         rg 'explosion completed' "$E2E_LOG_DIR/explosion-ok.out"
 
-        # 14) post-reset hint
-        go run {{.CMD_PATH}} --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" 2>&1 | rg 'not initialized'
+        # 14) post-reset no-arg invocation shows help
+        go run {{.CMD_PATH}} --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" 2>&1 | rg '^Usage:'
 
         # 15) bootstrap tamper should be blocked
         printf "%s\n%s\n" "$KINKO_DEV_E2E_PASSWORD" "$KINKO_DEV_E2E_PASSWORD" | go run {{.CMD_PATH}} --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false init >"$E2E_LOG_DIR/init2.out" 2>/dev/null

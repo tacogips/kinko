@@ -373,6 +373,7 @@ Examples:
 ```bash
 eval "$(kinko export --path . --force --confirm=false)"  # default: posix
 eval "$(kinko export bash --path . --force --confirm=false)"
+eval "$(kinko export bash --shared-only --force --confirm=false)"
 kinko export fish --path . --force --confirm=false | source
 kinko export nu --path . --force --confirm=false
 kinko export bash --path . --exclude AWS_SECRET_ACCESS_KEY --exclude "GITHUB_TOKEN,OPENAI_API_KEY" --force --confirm=false
@@ -429,6 +430,12 @@ Notes:
 
 ## direnv Example
 
+Add this once to your shell startup file so `.envrc` is applied automatically:
+
+- `bash`: `eval "$(direnv hook bash)"`
+- `zsh`: `eval "$(direnv hook zsh)"`
+- `fish`: `direnv hook fish | source`
+
 `.envrc`:
 
 ```bash
@@ -440,11 +447,47 @@ if command -v kinko >/dev/null 2>&1; then
 fi
 ```
 
+Then run `direnv allow` once in the repository root.
+
 `kinko direnv export` automatically:
 - resolves scope from `DIRENV_DIR`
 - uses `bash` output by default
 - applies non-interactive-safe behavior (`--force`, `--confirm=false`)
 - works safely with a command existence guard in `.envrc`
+- supports `--shared-only` to export only shared scope keys
+
+### Without direnv (load from shell startup files)
+
+If you do not want directory-based switching, you can load variables directly from `kinko` in your shell startup file.
+This loads shared scope only at shell startup (no `--path` required).
+
+- `bash` (`~/.bashrc`)
+```bash
+export KINKO_PROFILE=default
+if command -v kinko >/dev/null 2>&1; then
+  eval "$(kinko export bash --profile "$KINKO_PROFILE" --shared-only --force --confirm=false)"
+fi
+```
+- `zsh` (`~/.zshrc`)
+```bash
+export KINKO_PROFILE=default
+if command -v kinko >/dev/null 2>&1; then
+  eval "$(kinko export zsh --profile "$KINKO_PROFILE" --shared-only --force --confirm=false)"
+fi
+```
+- `fish` (`~/.config/fish/config.fish`)
+```fish
+set -gx KINKO_PROFILE default
+if command -q kinko
+  kinko export fish --profile "$KINKO_PROFILE" --shared-only --force --confirm=false | source
+end
+```
+
+Notes:
+- This does not switch values automatically when moving between directories.
+- Re-run your shell (or re-source your rc file) after updating secrets.
+- `eval "$(kinko export ...)"` is the correct form for `bash`/`zsh` (not `source $(kinko export ...)`).
+- `--shared-only` exports only shared keys and omits repository-specific keys.
 
 ## Dev Task Shortcuts
 
@@ -505,8 +548,8 @@ kinko explosion
 kinko get <key> [--reveal]
 kinko show [--reveal] [--all-scopes]
 kinko config show|set <key> <value>
-kinko export [shell] [--with-scope-comments] [--exclude <k1,k2>]...
-kinko direnv export [shell] [--with-scope-comments] [--exclude <k1,k2>]...
+kinko export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
+kinko direnv export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
 kinko import [shell] [--file <path>] [--yes|-y] [--confirm-with-values] [--allow-shared]
 kinko exec (--all|--env <k1,k2>) -- <command...>
 kinko password change [--current-stdin --new-stdin|--current-fd <n> --new-fd <n>] [--force-tty]

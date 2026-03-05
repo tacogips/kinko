@@ -765,8 +765,10 @@ func runExport(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 	fs := flag.NewFlagSet("export", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	withScopeComments := true
+	sharedOnly := false
 	var rawExcludeKeys stringListFlag
 	fs.BoolVar(&withScopeComments, "with-scope-comments", true, "include # kinko:scope markers in export output")
+	fs.BoolVar(&sharedOnly, "shared-only", false, "export only shared scope keys")
 	fs.Var(&rawExcludeKeys, "exclude", "comma-separated key denylist to omit from export output (repeatable)")
 
 	shellArg := shellPosix
@@ -803,6 +805,9 @@ func runExport(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 	if len(excluded) > 0 {
 		shared = filterSecretsByExclusion(shared, excluded)
 		repoSpecific = filterSecretsByExclusion(repoSpecific, excluded)
+	}
+	if sharedOnly {
+		repoSpecific = nil
 	}
 	if err := writeExportBlock(stdout, shell, "shared", "shared keys", shared, withScopeComments); err != nil {
 		return err

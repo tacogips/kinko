@@ -1019,6 +1019,42 @@ func TestRunExport_WithScopeCommentsEmitsMarkers(t *testing.T) {
 	}
 }
 
+func TestRunExport_SharedOnlyOmitsRepoSpecificBlock(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	opts.force = true
+	opts.confirm = false
+
+	var out bytes.Buffer
+	if err := runSet(opts, []string{"--shared", "API_KEY=shared", "GLOBAL_ONLY=global"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSet(opts, []string{"API_KEY=repo", "LOCAL_ONLY=local"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	var errBuf bytes.Buffer
+	if err := runExport(opts, []string{"posix", "--shared-only"}, strings.NewReader(""), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	exported := out.String()
+	if !strings.Contains(exported, "# kinko:scope=shared") {
+		t.Fatalf("missing shared marker by default: %q", exported)
+	}
+	if strings.Contains(exported, "# kinko:scope=repo") {
+		t.Fatalf("unexpected repo marker in shared-only export: %q", exported)
+	}
+	if !strings.Contains(exported, "export API_KEY='shared'") {
+		t.Fatalf("missing shared API_KEY in shared-only export: %q", exported)
+	}
+	if strings.Contains(exported, "export API_KEY='repo'") {
+		t.Fatalf("unexpected repo API_KEY in shared-only export: %q", exported)
+	}
+	if strings.Contains(exported, "LOCAL_ONLY") {
+		t.Fatalf("unexpected repo-only key in shared-only export: %q", exported)
+	}
+}
+
 func TestRunExport_ExcludeFiltersSharedAndRepoScopes(t *testing.T) {
 	opts := setupUnlockedForSet(t)
 	opts.force = true
