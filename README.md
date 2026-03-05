@@ -435,15 +435,16 @@ Notes:
 export KINKO_PROFILE=default
 KINKO_SCOPE_DIR="${DIRENV_DIR#-}"
 export KINKO_DATA_DIR="${KINKO_SCOPE_DIR}/.direnv/kinko"
-eval "$(kinko direnv export)"
+if command -v kinko >/dev/null 2>&1; then
+  eval "$(kinko direnv export)"
+fi
 ```
 
 `kinko direnv export` automatically:
 - resolves scope from `DIRENV_DIR`
 - uses `bash` output by default
 - applies non-interactive-safe behavior (`--force`, `--confirm=false`)
-
-If you want a ready-to-copy template, see `dotenvrc.sample` in the repository root.
+- works safely with a command existence guard in `.envrc`
 
 ## Dev Task Shortcuts
 
