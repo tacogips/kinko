@@ -469,6 +469,19 @@ Important:
 - `kinko` normalizes path values, so trailing slash and non-trailing slash are treated as the same directory.
   - Example: `/work/proj` and `/work/proj/` resolve identically.
 
+## Agent Skills for Secret Operations
+
+This repository includes reusable assistant skills under `.agents/skills/` for secure `kinko` operations.
+
+- `kinko-secret-ops`
+  - Purpose: standard workflow for init/unlock, set/get/show/delete, shared vs repository scope handling, export/import, and `kinko exec`.
+  - File: `.agents/skills/kinko-secret-ops/SKILL.md`
+- `refresh-github-token-to-kinko`
+  - Purpose: refresh `gh` token scopes and sync the effective token into `kinko` shared secret `GITHUB_TOKEN` with hash-based verification.
+  - File: `.agents/skills/refresh-github-token-to-kinko/SKILL.md`
+
+Use these skills when operating secrets in local development so command selection and safety checks stay consistent.
+
 ## Command Summary
 
 ```bash
