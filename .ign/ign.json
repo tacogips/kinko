@@ -1,0 +1,15 @@
+{
+  "template": {
+    "url": "https://github.com/tacogips/ign-template/go-v1",
+    "path": "go-v1",
+    "ref": "main"
+  },
+  "hash": "fe0627a9993c212f816c167ef70189ee7efa6da60183b551c2ca96d5f3568305",
+  "metadata": {
+    "generated_at": "2026-03-02T14:34:09.08410155+09:00",
+    "generated_by": "ign update",
+    "template_name": "go-v1",
+    "template_version": "1.0.0",
+    "ign_version": "0.1.13"
+  }
+}

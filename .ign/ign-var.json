@@ -1,0 +1,10 @@
+{
+  "variables": {
+    "DESCRIPTION": "A Golang project",
+    "GO_VERSION": "1.25.4",
+    "HOMEPAGE": "https://github.com/user/repo",
+    "MODULE_PATH": "githus.com/tacogips/kinko",
+    "PROJECT_NAME": "kinko",
+    "VERSION": "0.1.0"
+  }
+}
