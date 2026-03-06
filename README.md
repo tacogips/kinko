@@ -258,6 +258,22 @@ sequenceDiagram
   - Task build (`Taskfile.yml` ldflags)
   - Runtime command: `kinko version`
 
+## Install
+
+### Go (from local source)
+
+```bash
+go install ./cmd/kinko
+kinko version
+```
+
+### Go (from module path)
+
+```bash
+go install githus.com/tacogips/kinko/cmd/kinko@latest
+kinko version
+```
+
 ## Build
 
 ### Nix
