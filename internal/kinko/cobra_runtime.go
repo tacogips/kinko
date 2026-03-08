@@ -56,8 +56,14 @@ func newRuntimeRootCommand(ctx *runtimeContext) *cobra.Command {
 	root.PersistentFlags().BoolVar(&ctx.opts.force, "force", defaults.force, "override non-tty/redirection guardrails")
 	root.PersistentFlags().BoolVar(&ctx.opts.confirm, "confirm", defaults.confirm, "confirm sensitive tty output")
 
-	preflight := func() error {
+	finalizeOnlyPreflight := func() error {
 		if err := finalizeGlobalOptions(&ctx.opts); err != nil {
+			return err
+		}
+		return nil
+	}
+	preflight := func() error {
+		if err := finalizeOnlyPreflight(); err != nil {
 			return err
 		}
 		return validateBootstrapConfigFile(ctx.opts.configPath)
@@ -103,6 +109,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) *cobra.Command {
 				return runStatus(ctx.opts, ctx.stdout)
 			},
 		},
+		newBackupCommand(ctx, finalizeOnlyPreflight),
 		newSetCommand(ctx, preflight),
 		newSetKeyCommand(ctx, preflight),
 		newDeleteCommand(ctx, preflight),
@@ -127,6 +134,40 @@ func newRuntimeRootCommand(ctx *runtimeContext) *cobra.Command {
 	)
 
 	return root
+}
+
+func newBackupCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	currentStdin := false
+	forceTTY := false
+	currentFD := -1
+	destPath := "."
+	cmd := &cobra.Command{
+		Use:   cmdBackup,
+		Short: "Create a password-locked ZIP backup",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			parseArgs := []string{}
+			if currentStdin {
+				parseArgs = append(parseArgs, "--current-stdin")
+			}
+			if forceTTY {
+				parseArgs = append(parseArgs, "--force-tty")
+			}
+			if currentFD >= 0 {
+				parseArgs = append(parseArgs, "--current-fd", strconv.Itoa(currentFD))
+			}
+			parseArgs = append(parseArgs, "--dest-path", destPath)
+			return runBackup(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+		},
+	}
+	cmd.Flags().BoolVar(&currentStdin, "current-stdin", false, "read current password from stdin")
+	cmd.Flags().BoolVar(&forceTTY, "force-tty", false, "allow interactive prompts with redirected stdin")
+	cmd.Flags().IntVar(&currentFD, "current-fd", -1, "read current password from file descriptor")
+	cmd.Flags().StringVar(&destPath, "dest-path", ".", "destination directory for backup archive")
+	return cmd
 }
 
 func newUnlockCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {

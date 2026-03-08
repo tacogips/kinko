@@ -24,16 +24,17 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 
 	t.Run("init unlock status lock", func(t *testing.T) {
 		dataDir := t.TempDir()
+		configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
 
 		var initOut bytes.Buffer
 		initIn := strings.NewReader("pw123456\npw123456\n")
-		if err := Run([]string{"--kinko-dir", dataDir, "init"}, initIn, &initOut, &bytes.Buffer{}); err != nil {
+		if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "init"}, initIn, &initOut, &bytes.Buffer{}); err != nil {
 			t.Fatalf("init failed: %v", err)
 		}
 
 		var unlockOut bytes.Buffer
 		unlockIn := strings.NewReader("pw123456\n")
-		if err := Run([]string{"--kinko-dir", dataDir, "unlock", "--timeout", "5m"}, unlockIn, &unlockOut, &bytes.Buffer{}); err != nil {
+		if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "unlock", "--timeout", "5m"}, unlockIn, &unlockOut, &bytes.Buffer{}); err != nil {
 			t.Fatalf("unlock failed: %v", err)
 		}
 		if !strings.Contains(unlockOut.String(), "unlocked") {
@@ -41,14 +42,14 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 
 		var statusOut bytes.Buffer
-		if err := Run([]string{"--kinko-dir", dataDir, "status"}, strings.NewReader(""), &statusOut, &bytes.Buffer{}); err != nil {
+		if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "status"}, strings.NewReader(""), &statusOut, &bytes.Buffer{}); err != nil {
 			t.Fatalf("status failed: %v", err)
 		}
 		if !strings.Contains(statusOut.String(), "unlocked") {
 			t.Fatalf("unexpected status output: %q", statusOut.String())
 		}
 
-		if err := Run([]string{"--kinko-dir", dataDir, "lock"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "lock"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 			t.Fatalf("lock failed: %v", err)
 		}
 	})
@@ -98,6 +99,69 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 		if !strings.Contains(out.String(), "editor=vim") {
 			t.Fatalf("unexpected config output: %q", out.String())
+		}
+	})
+
+	t.Run("backup", func(t *testing.T) {
+		opts := setupBackupFixture(t)
+		destDir := t.TempDir()
+		base := []string{"--kinko-dir", opts.dataDir, "--config", opts.configPath, "backup", "--dest-path", destDir, "--current-stdin"}
+
+		var out bytes.Buffer
+		if err := Run(base, strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("backup failed: %v", err)
+		}
+		archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
+		if _, err := os.Stat(archivePath); err != nil {
+			t.Fatalf("backup archive missing: %v", err)
+		}
+	})
+
+	t.Run("backup without bootstrap config", func(t *testing.T) {
+		opts := setupBackupFixture(t)
+		if err := os.Remove(opts.configPath); err != nil {
+			t.Fatalf("remove bootstrap config: %v", err)
+		}
+		destDir := t.TempDir()
+		base := []string{"--kinko-dir", opts.dataDir, "--config", opts.configPath, "backup", "--dest-path", destDir, "--current-stdin"}
+
+		var out bytes.Buffer
+		if err := Run(base, strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("backup failed without bootstrap config: %v", err)
+		}
+		archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
+		if _, err := os.Stat(archivePath); err != nil {
+			t.Fatalf("backup archive missing: %v", err)
+		}
+	})
+
+	t.Run("backup defaults to current directory", func(t *testing.T) {
+		opts := setupBackupFixture(t)
+		cwd := t.TempDir()
+		oldWD, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		defer func() {
+			if chdirErr := os.Chdir(oldWD); chdirErr != nil {
+				t.Fatalf("restore cwd: %v", chdirErr)
+			}
+		}()
+
+		base := []string{"--kinko-dir", opts.dataDir, "--config", opts.configPath, "backup", "--current-stdin"}
+		var out bytes.Buffer
+		if err := Run(base, strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("backup failed: %v", err)
+		}
+		archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
+		if filepath.Dir(archivePath) != cwd {
+			t.Fatalf("backup should default to cwd: got %q want dir %q", archivePath, cwd)
+		}
+		if _, err := os.Stat(archivePath); err != nil {
+			t.Fatalf("backup archive missing: %v", err)
 		}
 	})
 

@@ -86,6 +86,36 @@ Exit codes:
 
 Show lock state, active timeout, data dir, and current path/profile resolution.
 
+### `kinko backup <directory>`
+
+Create a password-locked ZIP archive in the specified destination directory.
+The archive contains the vault persistence artifacts needed to restore stored data, plus the bootstrap config file when present.
+
+Examples:
+
+```bash
+kinko backup ./backups
+printf '%s\n' "$KINKO_PASSWORD" | kinko backup ./backups --current-stdin
+kinko backup ./backups --current-fd 3
+```
+
+Behavior:
+- Requires the current password even if the vault is already unlocked.
+- Does not require an active unlocked session; it authenticates directly against persisted vault metadata.
+- Creates the destination directory if needed.
+- Includes all regular persisted files under the kinko data directory, not only a fixed allowlist of known vault files.
+- Produces a ZIP archive that standard PKZIP-compatible readers can open with the current vault password.
+- Refuses to embed transient unlock state such as `lock/session.token`.
+- Rejects symlinks and other non-regular filesystem entries in the backup source tree, including a symlinked bootstrap config path.
+- Refuses destination directories inside the kinko data directory, including destinations that only resolve inside it through symlinks.
+- Fails if a concurrent vault mutation is in progress.
+
+Input modes:
+- interactive prompt on TTY stdin
+- `--current-stdin` for non-interactive stdin
+- `--current-fd` for descriptor-based password input
+- `--force-tty` to allow line-based interactive prompting when stdin is redirected
+
 ### `kinko set <key>=<value> [<key>=<value> ...]`
 
 Create or update one or more secret values under the resolved profile/path scope.

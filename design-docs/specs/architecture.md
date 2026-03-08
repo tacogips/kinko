@@ -180,6 +180,37 @@ Timeout:
 
 ## Command Runtime Data Flow
 
+### `kinko backup <directory>`
+
+1. Resolve output directory.
+2. Read the current password using interactive prompt, stdin, or fd-based input.
+3. Acquire the vault mutation lock to freeze a mutation-stable snapshot.
+4. Verify the password by unwrapping the persisted `DEK`; this command does not rely on unlocked session state.
+5. Enumerate persisted files under the data directory and include all regular files needed to restore stored state.
+   - Required baseline files include:
+     - `vault/meta.v1.json`
+     - `vault/vault.v1.bin`
+     - `vault/config.v1.bin`
+     - `vault/.kinko-vault-marker`
+   - Additional regular files under the data directory are included so future persisted state is not silently omitted.
+   - bootstrap config file is included when present.
+6. Exclude transient state from backup payload:
+   - `lock/session.token`
+   - session wrap key material in OS keychain
+   - `vault/.mutation.lock`
+   - symlinks and other non-regular filesystem nodes are rejected rather than followed, including the optional bootstrap config file
+7. Write a password-locked ZIP archive into the requested destination directory.
+   - The archive format must be readable by standard ZIP tools that support traditional PKZIP password protection.
+   - The ZIP password layer is for backup package access control and interoperability; confidentiality of secret values still primarily relies on the encrypted vault artifacts stored inside the archive.
+
+Backup consistency and scope rules:
+- Backup is a persistence operation, not a session export operation.
+- A successful backup must reflect a mutation-stable snapshot, so it acquires the same mutation lock used by write operations after credential input is collected.
+- The backup password is the current vault password at the time of backup creation.
+- Backup archives may contain encrypted vault files plus non-secret bootstrap metadata, but must not preserve unlocked runtime state.
+- The output destination must be outside the kinko data directory to avoid self-inclusion and accidental capture of prior backup artifacts.
+- Destination containment checks must use symlink-resolved paths so a symlinked output directory cannot bypass the self-inclusion guard.
+
 ### `kinko export <shell>`
 
 1. Resolve `profile`, `path`

@@ -78,6 +78,8 @@ Environment overrides:
   - KINKO_KEYCHAIN_PREFLIGHT overrides the default for --keychain-preflight.`, d.profile, d.path, d.dataDir, d.config),
 		Example: `  kinko init
   kinko unlock --timeout 9h
+  kinko backup
+  kinko backup --dest-path ./backups
   kinko set API_KEY=secret DB_URL=postgres://localhost
   kinko set --shared ORG_NAME=my-org
   kinko show
@@ -110,6 +112,7 @@ Environment overrides:
 		helpCmdUnlock(),
 		helpCmdLock(),
 		helpCmdStatus(),
+		helpCmdBackup(),
 		helpCmdVersion(),
 		helpCmdSet(),
 		helpCmdSetKey(),
@@ -200,6 +203,38 @@ func helpCmdStatus() *cobra.Command {
 		Args:  cobra.ArbitraryArgs,
 		RunE:  passthroughHelp,
 	}
+}
+
+func helpCmdBackup() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "backup",
+		Short: "Create a password-locked ZIP backup",
+		Long: `Creates a password-locked ZIP archive in the current directory by default.
+
+Use --dest-path to write the archive into a different destination directory.
+
+The archive includes persistent vault artifacts and the bootstrap config file when present.
+All regular persisted files under the kinko data directory are included.
+Transient unlock artifacts such as lock/session.token are excluded.
+The destination directory must be outside the kinko data directory.
+
+Password input modes:
+  - interactive prompt on TTY stdin
+  - --current-stdin for non-interactive stdin
+  - --current-fd for descriptor-based input
+  - --force-tty for line-based interactive prompting on redirected stdin`,
+		Example: `  kinko backup
+  kinko backup --dest-path ./backups
+  printf 'pw\n' | kinko backup --current-stdin
+  kinko backup --dest-path ./backups --current-fd 3`,
+		Args: cobra.ArbitraryArgs,
+		RunE: passthroughHelp,
+	}
+	cmd.Flags().Bool("current-stdin", false, "Read current password from stdin")
+	cmd.Flags().Bool("force-tty", false, "Allow interactive prompts with redirected stdin")
+	cmd.Flags().Int("current-fd", -1, "Read current password from file descriptor")
+	cmd.Flags().String("dest-path", ".", "Destination directory for backup archive")
+	return cmd
 }
 
 func helpCmdVersion() *cobra.Command {
