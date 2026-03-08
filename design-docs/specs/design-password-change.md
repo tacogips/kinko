@@ -21,7 +21,7 @@ This keeps runtime short and avoids full vault re-encryption.
 - Preserve all existing secrets/config as-is
 - Use atomic persistence to avoid vault lockout from partial writes
 - Provide clear and scriptable CLI behavior with safe defaults
-- Enforce strong password input and confirmation flows
+- Enforce safe password input and confirmation flows
 
 ## Non-Goals
 
@@ -86,14 +86,14 @@ If unwrap/authentication fails, the command exits and performs no writes.
 ### New Password Policy (MVP)
 
 Minimum requirements:
-- length >= 12 characters
 - must differ from current password
 - after trimming leading and trailing whitespace, value must not be empty
-- leading/trailing whitespace characters are not allowed
+- leading/trailing whitespace is trimmed before comparison and persistence
 - accepted password bytes are UTF-8 text excluding control characters (`0x00`-`0x1F`, `0x7F`)
 
 Policy extensibility:
-- policy is enforced in a validator layer so future entropy/rules can be added without changing storage format
+- policy is intentionally minimal in MVP so password change stays aligned with `kinko init` and other password-authenticated flows
+- future entropy or complexity rules, if adopted, must be introduced consistently across password creation and password change flows without changing storage format
 
 ### Argon2id Baseline (Normative)
 
@@ -212,7 +212,7 @@ Required test categories for implementation phase:
 
 - Happy path: valid current/new password updates wrap metadata
 - Auth failure: wrong current password causes no write
-- Policy failure: weak/matching new password causes no write
+- Policy failure: empty-after-trim or matching new password causes no write
 - Atomicity: simulated write interruption preserves recoverable state
 - Concurrency: simultaneous mutate commands produce deterministic conflict handling
 - Post-change behavior: old password fails, new password succeeds, vault data unchanged

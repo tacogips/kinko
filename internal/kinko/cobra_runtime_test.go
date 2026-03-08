@@ -264,6 +264,24 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("password change rejects unchanged password", func(t *testing.T) {
+		opts := setupPasswordChangeFixture(t, "current-password-123")
+		in := strings.NewReader("current-password-123\ncurrent-password-123\n")
+		err := Run([]string{"--kinko-dir", opts.dataDir, "password", "change", "--current-stdin", "--new-stdin"}, in, &bytes.Buffer{}, &bytes.Buffer{})
+		if err == nil {
+			t.Fatal("expected unchanged password rejection")
+		}
+		if code := ExitCode(err); code != exitCodePolicyFailed {
+			t.Fatalf("unexpected exit code: got=%d want=%d err=%v", code, exitCodePolicyFailed, err)
+		}
+		if got := err.Error(); got != "New password must differ from current password." {
+			t.Fatalf("unexpected error message: %q", got)
+		}
+		if err := unlockSession(opts.dataDir, 5*time.Minute, "current-password-123"); err != nil {
+			t.Fatalf("current password should remain valid after rejection: %v", err)
+		}
+	})
+
 	t.Run("explosion command wiring", func(t *testing.T) {
 		opts := setupUnlockedForSet(t)
 		in := strings.NewReader("wrong-password\n")

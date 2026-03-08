@@ -73,6 +73,7 @@ Security behavior:
 - On success, vault transitions to globally locked state and invalidates active unlocked sessions.
 - Non-interactive mode requires paired `--current-fd/--new-fd` (preferred) or `--current-stdin/--new-stdin`.
 - Password input from command arguments or environment variables is not supported.
+- New password validation is limited to the shared password sanitation rules plus rejection of unchanged passwords.
 
 Exit codes:
 - `0`: success
