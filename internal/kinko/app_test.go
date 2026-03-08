@@ -163,6 +163,28 @@ func TestRunInit_WithForceSucceeds(t *testing.T) {
 	}
 }
 
+func TestRunInit_TrimsWhitespaceFromPassword(t *testing.T) {
+	withFakeSessionStore(t)
+	opts := globalOptions{
+		dataDir:    filepath.Join(t.TempDir(), "data"),
+		configPath: filepath.Join(t.TempDir(), "bootstrap.toml"),
+		force:      false,
+		confirm:    true,
+	}
+	in := strings.NewReader("  pw123456  \n  pw123456  \n")
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := runInit(opts, nil, in, &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "pw123456"); err != nil {
+		t.Fatalf("trimmed password should unlock: %v", err)
+	}
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "  pw123456  "); err == nil {
+		t.Fatal("untrimmed password should not unlock")
+	}
+}
+
 type failingSecretStore struct{}
 
 func (failingSecretStore) Get(service, user string) (string, error) {
