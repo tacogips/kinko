@@ -78,10 +78,6 @@ func runPasswordChange(opts globalOptions, args []string, stdin io.Reader, stdou
 	if err != nil {
 		return newCLIError(exitCodePolicyFailed, "New password does not satisfy policy requirements.", err)
 	}
-	if err := validateNewPassword(current, next); err != nil {
-		return newCLIError(exitCodePolicyFailed, "New password does not satisfy policy requirements.", err)
-	}
-
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
 		return newCLIError(exitCodeLockConflict, "Password change could not acquire mutation lock.", err)
@@ -103,6 +99,9 @@ func runPasswordChange(opts globalOptions, args []string, stdin io.Reader, stdou
 		default:
 			return newCLIError(exitCodeIOFailed, "Failed to verify current password.", err)
 		}
+	}
+	if current == next {
+		return newCLIError(exitCodePolicyFailed, "New password must differ from current password.", errors.New("new password must differ from current password"))
 	}
 
 	params, err := floorEnforcedPasswordKDFParams(meta.KDFParamsPassword)
@@ -359,16 +358,6 @@ func normalizeConfirmedPassword(next, confirm string) (string, error) {
 		return "", errors.New("new password confirmation does not match")
 	}
 	return next, nil
-}
-
-func validateNewPassword(current, next string) error {
-	if next == current {
-		return errors.New("new password must differ from current password")
-	}
-	if utf8.RuneCountInString(next) < 12 {
-		return errors.New("new password must be at least 12 characters")
-	}
-	return nil
 }
 
 func acquireMutationLock(dataDir string) (func(), error) {

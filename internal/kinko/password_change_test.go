@@ -71,6 +71,85 @@ func TestRunPasswordChange_TrimsWhitespace(t *testing.T) {
 	}
 }
 
+func TestRunPasswordChange_AllowsShortNewPassword(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	in := strings.NewReader("current-password-123\nshort-pass\n")
+	err := runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "short-pass"); err != nil {
+		t.Fatalf("short new password should unlock: %v", err)
+	}
+}
+
+func TestRunPasswordChange_RejectsSamePasswordWithSpecificMessage(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	in := strings.NewReader("current-password-123\ncurrent-password-123\n")
+	err := runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected same-password rejection")
+	}
+	if code := ExitCode(err); code != exitCodePolicyFailed {
+		t.Fatalf("unexpected exit code: got=%d want=%d err=%v", code, exitCodePolicyFailed, err)
+	}
+	if got := err.Error(); got != "New password must differ from current password." {
+		t.Fatalf("unexpected error message: %q", got)
+	}
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "current-password-123"); err != nil {
+		t.Fatalf("current password should remain valid after rejected change: %v", err)
+	}
+}
+
+func TestRunPasswordChange_RejectsWhitespaceOnlyPasswordChange(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	in := strings.NewReader(" current-password-123 \n  current-password-123  \n")
+	err := runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected whitespace-only password change rejection")
+	}
+	if code := ExitCode(err); code != exitCodePolicyFailed {
+		t.Fatalf("unexpected exit code: got=%d want=%d err=%v", code, exitCodePolicyFailed, err)
+	}
+	if got := err.Error(); got != "New password must differ from current password." {
+		t.Fatalf("unexpected error message: %q", got)
+	}
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "current-password-123"); err != nil {
+		t.Fatalf("current password should remain valid after rejected whitespace-only change: %v", err)
+	}
+}
+
+func TestRunPasswordChange_PrioritizesCurrentPasswordAuthOverSamePasswordPolicy(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	in := strings.NewReader("wrong-password-123\nwrong-password-123\n")
+	err := runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected authentication failure")
+	}
+	if code := ExitCode(err); code != exitCodeAuthFailed {
+		t.Fatalf("unexpected exit code: got=%d want=%d err=%v", code, exitCodeAuthFailed, err)
+	}
+	if got := err.Error(); got != "Current password is invalid." {
+		t.Fatalf("unexpected error message: %q", got)
+	}
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "current-password-123"); err != nil {
+		t.Fatalf("current password should remain valid after rejected change: %v", err)
+	}
+}
+
 func TestNormalizeConfirmedPassword_TrimsBeforeComparison(t *testing.T) {
 	got, err := normalizeConfirmedPassword("  next-password-456  ", "next-password-456")
 	if err != nil {

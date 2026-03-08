@@ -46,6 +46,7 @@ Large features are split into multiple related plans with cross-references.
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
 | `kinko-backup.md` | 2026-03-08 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |
+| `password-change-policy-alignment.md` | 2026-03-08 | `design-docs/specs/design-password-change.md` |
 | `kinko-secure-runtime-mvp.md` | 2026-03-02 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |
 
 ## Phase Dependencies (for impl-exec-auto)
