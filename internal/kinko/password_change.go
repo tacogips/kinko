@@ -70,6 +70,14 @@ func runPasswordChange(opts globalOptions, args []string, stdin io.Reader, stdou
 	if err != nil {
 		return newCLIError(exitCodePolicyFailed, err.Error(), err)
 	}
+	current, err = sanitizePasswordValue(current)
+	if err != nil {
+		return newCLIError(exitCodePolicyFailed, "Current password is invalid.", err)
+	}
+	next, err = sanitizePasswordValue(next)
+	if err != nil {
+		return newCLIError(exitCodePolicyFailed, "New password does not satisfy policy requirements.", err)
+	}
 	if err := validateNewPassword(current, next); err != nil {
 		return newCLIError(exitCodePolicyFailed, "New password does not satisfy policy requirements.", err)
 	}
@@ -202,8 +210,9 @@ func readPasswordInteractive(stdin io.Reader, stderr io.Writer, forceTTY bool) (
 		if err != nil {
 			return "", "", err
 		}
-		if next != confirm {
-			return "", "", errors.New("new password confirmation does not match")
+		next, err = normalizeConfirmedPassword(next, confirm)
+		if err != nil {
+			return "", "", err
 		}
 		return current, next, nil
 	}
@@ -223,8 +232,9 @@ func readPasswordInteractive(stdin io.Reader, stderr io.Writer, forceTTY bool) (
 	if err != nil {
 		return "", "", err
 	}
-	if next != confirm {
-		return "", "", errors.New("new password confirmation does not match")
+	next, err = normalizeConfirmedPassword(next, confirm)
+	if err != nil {
+		return "", "", err
 	}
 	return current, next, nil
 }
@@ -320,26 +330,43 @@ func normalizePasswordInput(raw []byte) (string, error) {
 	return s, nil
 }
 
+func sanitizePasswordValue(password string) (string, error) {
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return "", errors.New("password must not be empty after trimming whitespace")
+	}
+	if !utf8.ValidString(password) {
+		return "", errors.New("password must be valid UTF-8")
+	}
+	for _, r := range password {
+		if unicode.IsControl(r) {
+			return "", errors.New("control characters are not allowed in password")
+		}
+	}
+	return password, nil
+}
+
+func normalizeConfirmedPassword(next, confirm string) (string, error) {
+	next, err := sanitizePasswordValue(next)
+	if err != nil {
+		return "", err
+	}
+	confirm, err = sanitizePasswordValue(confirm)
+	if err != nil {
+		return "", err
+	}
+	if next != confirm {
+		return "", errors.New("new password confirmation does not match")
+	}
+	return next, nil
+}
+
 func validateNewPassword(current, next string) error {
 	if next == current {
 		return errors.New("new password must differ from current password")
 	}
 	if utf8.RuneCountInString(next) < 12 {
 		return errors.New("new password must be at least 12 characters")
-	}
-	if strings.TrimSpace(next) == "" {
-		return errors.New("new password must not be empty after trimming whitespace")
-	}
-	if strings.TrimSpace(next) != next {
-		return errors.New("leading/trailing whitespace is not allowed")
-	}
-	for _, r := range next {
-		if !utf8.ValidRune(r) {
-			return errors.New("password must be valid UTF-8")
-		}
-		if unicode.IsControl(r) {
-			return errors.New("control characters are not allowed in password")
-		}
 	}
 	return nil
 }

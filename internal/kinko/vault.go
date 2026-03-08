@@ -72,6 +72,10 @@ var errDecryptFailed = errors.New("decrypt failed")
 var errMetadataInvalid = errors.New("metadata invalid")
 
 func initVault(dataDir string, password string) error {
+	password, err := sanitizePasswordValue(password)
+	if err != nil {
+		return fmt.Errorf("normalize password: %w", err)
+	}
 	saltPass := mustRandom(saltLength)
 	dek := mustRandom(dekLength)
 

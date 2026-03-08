@@ -52,6 +52,35 @@ func TestRunPasswordChange_Success(t *testing.T) {
 	}
 }
 
+func TestRunPasswordChange_TrimsWhitespace(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	in := strings.NewReader("  current-password-123  \n  next-password-456  \n")
+	err := runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "next-password-456"); err != nil {
+		t.Fatalf("trimmed new password should unlock: %v", err)
+	}
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "  next-password-456  "); err == nil {
+		t.Fatal("untrimmed new password should not unlock")
+	}
+}
+
+func TestNormalizeConfirmedPassword_TrimsBeforeComparison(t *testing.T) {
+	got, err := normalizeConfirmedPassword("  next-password-456  ", "next-password-456")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "next-password-456" {
+		t.Fatalf("unexpected normalized password: got=%q", got)
+	}
+}
+
 func TestRunPasswordChange_AuthFailureExitCode(t *testing.T) {
 	opts := setupPasswordChangeFixture(t, "current-password-123")
 	var out bytes.Buffer

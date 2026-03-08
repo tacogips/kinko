@@ -5,6 +5,7 @@ const (
 	cmdUnlock    = "unlock"
 	cmdLock      = "lock"
 	cmdStatus    = "status"
+	cmdBackup    = "backup"
 	cmdVersion   = "version"
 	cmdSet       = "set"
 	cmdSetKey    = "set-key"
