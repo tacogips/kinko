@@ -14,6 +14,14 @@ import (
 	keyring "github.com/zalando/go-keyring"
 )
 
+func TestMain(m *testing.M) {
+	prev := sessionSecretStore
+	sessionSecretStore = newFakeSecretStore()
+	code := m.Run()
+	sessionSecretStore = prev
+	os.Exit(code)
+}
+
 type fakeSecretStore struct {
 	data map[string]string
 }
