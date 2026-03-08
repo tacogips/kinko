@@ -2,6 +2,7 @@ package kinko
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"testing"
 )
 
@@ -55,5 +56,28 @@ func TestDeriveSessionKeyPairFromPassword_Deterministic(t *testing.T) {
 	pub3, _ := deriveSessionKeyPairFromPassword(password + "x")
 	if string(pub1) == string(pub3) {
 		t.Fatal("expected different public key for different passwords")
+	}
+}
+
+func TestNewVaultUsesRandomSessionKeyMaterial(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "test-password"); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := loadMeta(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.SessionKeySource != sessionKeyRandom {
+		t.Fatalf("unexpected session key source: %q", meta.SessionKeySource)
+	}
+
+	legacyPub, _ := deriveSessionKeyPairFromPassword("test-password")
+	if meta.SessionPubKeyB64 == base64.StdEncoding.EncodeToString(legacyPub) {
+		t.Fatal("new vault must not store password-derived session public key")
 	}
 }

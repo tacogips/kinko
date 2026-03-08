@@ -2,6 +2,7 @@ package kinko
 
 import (
 	"bytes"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,8 +152,49 @@ func TestRunPasswordChange_RevocationFailureDoesNotCommitPasswordChange(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.WrappedDEKPassB64 != before.WrappedDEKPassB64 || after.SaltPasswordB64 != before.SaltPasswordB64 || after.SessionPubKeyB64 != before.SessionPubKeyB64 || after.EncSessionPrivB64 != before.EncSessionPrivB64 {
+	if after.WrappedDEKPassB64 != before.WrappedDEKPassB64 || after.SaltPasswordB64 != before.SaltPasswordB64 || after.SessionPubKeyB64 != before.SessionPubKeyB64 || after.EncSessionPrivB64 != before.EncSessionPrivB64 || after.SessionKeySource != before.SessionKeySource {
 		t.Fatal("metadata changed despite revocation failure")
+	}
+}
+
+func TestRunPasswordChange_LegacyVaultUpgradesSessionKeyMetadata(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+	meta, err := loadMeta(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDEK, err := unwrapDEKWithPassword(meta, "current-password-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPub, legacyPriv := deriveSessionKeyPairFromPassword("current-password-123")
+	legacyEncPriv, err := encryptBlob(oldDEK, legacyPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.SessionPubKeyB64 = base64.StdEncoding.EncodeToString(legacyPub)
+	meta.EncSessionPrivB64 = legacyEncPriv
+	meta.SessionKeySource = ""
+	if err := saveMeta(opts.dataDir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	in := strings.NewReader("current-password-123\nnext-password-456\n")
+	if err := runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	after, err := loadMeta(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.SessionKeySource != sessionKeyRandom {
+		t.Fatalf("expected session key source %q, got %q", sessionKeyRandom, after.SessionKeySource)
+	}
+	if after.SessionPubKeyB64 == base64.StdEncoding.EncodeToString(legacyPub) {
+		t.Fatal("password change must replace legacy password-derived session public key")
 	}
 }
 

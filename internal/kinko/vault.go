@@ -34,6 +34,7 @@ const (
 	dekLength         = 32
 	vaultVersion      = 1
 	vaultMarker       = ".kinko-vault-marker"
+	sessionKeyRandom  = "random"
 )
 
 type vaultMeta struct {
@@ -42,6 +43,7 @@ type vaultMeta struct {
 	WrappedDEKPassB64 string     `json:"wrapped_dek_pass_b64"`
 	SessionPubKeyB64  string     `json:"session_pub_key_b64"`
 	EncSessionPrivB64 string     `json:"enc_session_priv_key_b64"`
+	SessionKeySource  string     `json:"session_key_source,omitempty"`
 	KDFParamsPassword *kdfParams `json:"kdf_params_password,omitempty"`
 	UpdatedAt         string     `json:"updated_at,omitempty"`
 }
@@ -79,18 +81,18 @@ func initVault(dataDir string, password string) error {
 	if err != nil {
 		return err
 	}
-	pub, priv := deriveSessionKeyPairFromPassword(password)
-	encPriv, err := encryptBlob(dek, priv)
+	pubB64, encPriv, err := newRandomSessionKeyMaterial(dek)
 	if err != nil {
-		return fmt.Errorf("encrypt session private key: %w", err)
+		return fmt.Errorf("generate session key material: %w", err)
 	}
 
 	meta := vaultMeta{
 		Version:           vaultVersion,
 		SaltPasswordB64:   base64.StdEncoding.EncodeToString(saltPass),
 		WrappedDEKPassB64: wrappedPass,
-		SessionPubKeyB64:  base64.StdEncoding.EncodeToString(pub),
+		SessionPubKeyB64:  pubB64,
 		EncSessionPrivB64: encPriv,
+		SessionKeySource:  sessionKeyRandom,
 		KDFParamsPassword: kdf,
 		UpdatedAt:         time.Now().UTC().Format(time.RFC3339),
 	}
@@ -261,6 +263,53 @@ func deriveSessionKeyPairFromPassword(password string) (ed25519.PublicKey, ed255
 	priv := ed25519.NewKeyFromSeed(seed[:])
 	pub := priv.Public().(ed25519.PublicKey)
 	return pub, priv
+}
+
+func generateRandomSessionKeyPair() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pub, priv, nil
+}
+
+func newRandomSessionKeyMaterial(dek []byte) (string, string, error) {
+	pub, priv, err := generateRandomSessionKeyPair()
+	if err != nil {
+		return "", "", err
+	}
+	encPriv, err := encryptBlob(dek, priv)
+	if err != nil {
+		return "", "", err
+	}
+	return base64.StdEncoding.EncodeToString(pub), encPriv, nil
+}
+
+func usesLegacyPasswordDerivedSessionKey(meta *vaultMeta) bool {
+	if meta == nil {
+		return false
+	}
+	return strings.TrimSpace(meta.SessionKeySource) == ""
+}
+
+func migrateLegacySessionKey(dataDir string, meta *vaultMeta, dek []byte) (*vaultMeta, bool, error) {
+	if !usesLegacyPasswordDerivedSessionKey(meta) {
+		return meta, false, nil
+	}
+
+	next := cloneVaultMeta(meta)
+	pubB64, encPriv, err := newRandomSessionKeyMaterial(dek)
+	if err != nil {
+		return nil, false, err
+	}
+	next.SessionPubKeyB64 = pubB64
+	next.EncSessionPrivB64 = encPriv
+	next.SessionKeySource = sessionKeyRandom
+	next.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := saveMetaAtomically(dataDir, next); err != nil {
+		return nil, false, err
+	}
+	return next, true, nil
 }
 
 func encryptBlob(key, plain []byte) (string, error) {

@@ -62,6 +62,10 @@ func unlockSession(dataDir string, timeout time.Duration, secret string) error {
 		}
 		return fmt.Errorf("unwrap data key: %w", err)
 	}
+	meta, _, err = migrateLegacySessionKey(dataDir, meta, dek)
+	if err != nil {
+		return fmt.Errorf("migrate session key metadata: %w", err)
+	}
 	wrapKey, err := loadOrCreateSessionWrapKey(dataDir, meta)
 	if err != nil {
 		return fmt.Errorf("prepare session wrap key: %w", err)
