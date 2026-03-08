@@ -108,8 +108,7 @@ func runPasswordChange(opts globalOptions, args []string, stdin io.Reader, stdou
 	if err != nil {
 		return newCLIError(exitCodeIOFailed, "Failed to produce new password wrap.", err)
 	}
-	pub, priv := deriveSessionKeyPairFromPassword(next)
-	newEncSessionPriv, err := encryptBlob(oldDEK, priv)
+	newSessionPubB64, newEncSessionPriv, err := newRandomSessionKeyMaterial(oldDEK)
 	if err != nil {
 		return newCLIError(exitCodeIOFailed, "Failed to update session key material.", err)
 	}
@@ -117,8 +116,9 @@ func runPasswordChange(opts globalOptions, args []string, stdin io.Reader, stdou
 	nextMeta := *meta
 	nextMeta.SaltPasswordB64 = base64.StdEncoding.EncodeToString(newSalt)
 	nextMeta.WrappedDEKPassB64 = newWrappedDEK
-	nextMeta.SessionPubKeyB64 = base64.StdEncoding.EncodeToString(pub)
+	nextMeta.SessionPubKeyB64 = newSessionPubB64
 	nextMeta.EncSessionPrivB64 = newEncSessionPriv
+	nextMeta.SessionKeySource = sessionKeyRandom
 	nextMeta.KDFParamsPassword = params
 	nextMeta.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 

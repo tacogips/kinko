@@ -216,3 +216,52 @@ func TestLockSessionWithWarning_ReportsCleanupFailure(t *testing.T) {
 		t.Fatalf("expected cleanup warning, got: %q", warn.String())
 	}
 }
+
+func TestUnlockSession_MigratesLegacyPasswordDerivedSessionKey(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "pw"); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := loadMeta(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dek, err := unwrapDEKWithPassword(meta, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPub, legacyPriv := deriveSessionKeyPairFromPassword("pw")
+	legacyEncPriv, err := encryptBlob(dek, legacyPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.SessionPubKeyB64 = base64.StdEncoding.EncodeToString(legacyPub)
+	meta.EncSessionPrivB64 = legacyEncPriv
+	meta.SessionKeySource = ""
+	if err := saveMeta(dataDir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := unlockSession(dataDir, 5*time.Minute, "pw"); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := loadMeta(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.SessionKeySource != sessionKeyRandom {
+		t.Fatalf("expected migrated session key source %q, got %q", sessionKeyRandom, migrated.SessionKeySource)
+	}
+	if migrated.SessionPubKeyB64 == base64.StdEncoding.EncodeToString(legacyPub) {
+		t.Fatal("expected unlock to replace legacy password-derived session public key")
+	}
+	if _, err := loadUnlockedDEK(dataDir); err != nil {
+		t.Fatalf("expected migrated session to remain usable: %v", err)
+	}
+}
