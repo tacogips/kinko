@@ -128,6 +128,20 @@ func TestRunSetKey_ValueFlagWorks(t *testing.T) {
 	}
 }
 
+func TestRunSetKey_ExplicitEmptyValueFlagWorks(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var out bytes.Buffer
+	if err := runSetKey(opts, []string{"A", "--value="}, strings.NewReader("ignored\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := valueAtScope(t, opts, "A"); got != "" {
+		t.Fatalf("A=%q", got)
+	}
+	if out.String() != "A set\n" {
+		t.Fatalf("out=%q", out.String())
+	}
+}
+
 func TestRunSetKey_KeyFirstValueFlagWorks(t *testing.T) {
 	opts := setupUnlockedForSet(t)
 	var out bytes.Buffer
