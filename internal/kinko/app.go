@@ -31,63 +31,12 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		stdout: stdout,
 		stderr: stderr,
 	}
-	root := newRuntimeRootCommand(ctx)
+	root, err := newRuntimeRootCommand(ctx)
+	if err != nil {
+		return err
+	}
 	root.SetArgs(args)
 	return root.Execute()
-}
-
-func parseGlobalOptions(args []string) (globalOptions, []string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return globalOptions{}, nil, fmt.Errorf("resolve cwd: %w", err)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return globalOptions{}, nil, fmt.Errorf("resolve home dir: %w", err)
-	}
-
-	fs := flag.NewFlagSet("kinko", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
-	opts := globalOptions{}
-	fs.StringVar(&opts.profile, "profile", envOrDefault("KINKO_PROFILE", defaultProfile), "profile")
-	fs.StringVar(&opts.path, "path", envOrDefault("KINKO_PATH", cwd), "path")
-	fs.StringVar(&opts.dataDir, "kinko-dir", envOrDefault("KINKO_DATA_DIR", filepath.Join(home, ".local", "kinko")), "kinko data dir")
-	fs.StringVar(&opts.configPath, "config", envOrDefault("KINKO_CONFIG", filepath.Join(home, ".config", "kinko", "bootstrap.toml")), "bootstrap config path")
-	fs.StringVar(&opts.keychainPreflight, "keychain-preflight", envOrDefault("KINKO_KEYCHAIN_PREFLIGHT", "required"), "keychain preflight mode: required|best-effort|off")
-	fs.BoolVar(&opts.force, "force", false, "override non-tty/redirection guardrails")
-	fs.BoolVar(&opts.confirm, "confirm", true, "confirm sensitive tty output")
-
-	if err := fs.Parse(args); err != nil {
-		return globalOptions{}, nil, err
-	}
-	if strings.TrimSpace(opts.profile) == "" {
-		return globalOptions{}, nil, errors.New("--profile must not be empty")
-	}
-
-	absPath, err := filepath.Abs(normalizePathInput(opts.path))
-	if err != nil {
-		return globalOptions{}, nil, fmt.Errorf("resolve --path: %w", err)
-	}
-	opts.path = filepath.Clean(absPath)
-
-	absDataDir, err := filepath.Abs(opts.dataDir)
-	if err != nil {
-		return globalOptions{}, nil, fmt.Errorf("resolve --kinko-dir: %w", err)
-	}
-	opts.dataDir = filepath.Clean(absDataDir)
-	absConfigPath, err := filepath.Abs(opts.configPath)
-	if err != nil {
-		return globalOptions{}, nil, fmt.Errorf("resolve --config: %w", err)
-	}
-	opts.configPath = filepath.Clean(absConfigPath)
-	switch opts.keychainPreflight {
-	case "required", "best-effort", "off":
-	default:
-		return globalOptions{}, nil, errors.New("--keychain-preflight must be one of: required, best-effort, off")
-	}
-
-	return opts, fs.Args(), nil
 }
 
 func runInit(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {

@@ -1360,3 +1360,87 @@ func TestRunImport_RejectsInvalidScopeMarker(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestRunProfile_ListSortedStoredProfiles(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+
+	if err := runSet(opts, []string{"DEFAULT_KEY=default"}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	dev := opts
+	dev.profile = "dev"
+	if err := runSet(dev, []string{"DEV_KEY=dev"}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	prod := opts
+	prod.profile = "prod"
+	if err := runSet(prod, []string{"PROD_KEY=prod"}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runSet(opts, []string{"--shared", "SHARED_ONLY=value"}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := runProfile(opts, []string{profileList}, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	got := strings.TrimSpace(out.String())
+	if got != "default\ndev\nprod" {
+		t.Fatalf("unexpected profile list output: %q", got)
+	}
+}
+
+func TestRunProfile_ListEmptyWhenOnlySharedKeysExist(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+
+	dek, err := loadUnlockedDEK(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vd, err := loadVault(opts.dataDir, dek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vd.Profiles = map[string]map[string]map[string]string{}
+	vd.Shared["SHARED_ONLY"] = "value"
+	if err := saveVault(opts.dataDir, dek, vd); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := runProfile(opts, []string{profileList}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "" {
+		t.Fatalf("expected no stored profiles, got %q", out.String())
+	}
+}
+
+func TestRunProfile_RejectsExtraArgs(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+
+	err := runProfile(opts, []string{profileList, "extra"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "does not accept positional arguments") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunProfile_RejectsUnknownSubcommand(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+
+	err := runProfile(opts, []string{"rename"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `unknown profile subcommand "rename"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

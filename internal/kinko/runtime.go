@@ -1357,6 +1357,44 @@ func runConfig(opts globalOptions, args []string, stdout io.Writer) error {
 	}
 }
 
+func runProfile(opts globalOptions, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("profile requires subcommand: list")
+	}
+
+	switch args[0] {
+	case profileList:
+		if len(args) != 1 {
+			return errors.New("profile list does not accept positional arguments")
+		}
+
+		dek, err := loadUnlockedDEK(opts.dataDir)
+		if err != nil {
+			return err
+		}
+		vd, err := loadVault(opts.dataDir, dek)
+		if err != nil {
+			return err
+		}
+
+		for _, name := range storedProfileNames(vd) {
+			_, _ = fmt.Fprintln(stdout, name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown profile subcommand %q", args[0])
+	}
+}
+
+func storedProfileNames(vd *vaultData) []string {
+	names := make([]string, 0, len(vd.Profiles))
+	for name := range vd.Profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func runExec(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

@@ -20,23 +20,22 @@ type runtimeContext struct {
 	opts   globalOptions
 }
 
-func newRuntimeRootCommand(ctx *runtimeContext) *cobra.Command {
+var (
+	getWorkingDirectory = os.Getwd
+	getUserHomeDir      = os.UserHomeDir
+)
+
+func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 	defaults, err := defaultGlobalOptions()
 	if err != nil {
-		defaults = globalOptions{
-			profile:           defaultProfile,
-			path:              ".",
-			dataDir:           ".",
-			configPath:        ".",
-			keychainPreflight: "required",
-			confirm:           true,
-		}
+		return nil, err
 	}
 	ctx.opts = defaults
 
 	root := &cobra.Command{
 		Use:           "kinko",
 		Short:         "Encrypted local secret vault with scope-aware environment workflows",
+		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -47,6 +46,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) *cobra.Command {
 	root.SetOut(ctx.stdout)
 	root.SetErr(ctx.stderr)
 	root.TraverseChildren = true
+	root.CompletionOptions.DisableDefaultCmd = true
 
 	root.PersistentFlags().StringVar(&ctx.opts.profile, "profile", defaults.profile, "profile")
 	root.PersistentFlags().StringVar(&ctx.opts.path, "path", defaults.path, "path")
@@ -129,11 +129,12 @@ func newRuntimeRootCommand(ctx *runtimeContext) *cobra.Command {
 		newExportCommand(ctx, preflight),
 		newImportCommand(ctx, preflight),
 		newExecCommand(ctx, preflight),
+		newProfileCommand(ctx, preflight),
 		newDirenvCommand(ctx, preflight),
 		newPasswordCommand(ctx, preflight),
 	)
 
-	return root
+	return root, nil
 }
 
 func newBackupCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
@@ -220,8 +221,8 @@ func newSetKeyCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 			if shared {
 				parseArgs = append(parseArgs, "--shared")
 			}
-			if value != "" {
-				parseArgs = append(parseArgs, "--value", value)
+			if cmd.Flags().Changed("value") {
+				parseArgs = append(parseArgs, "--value="+value)
 			}
 			return runSetKey(ctx.opts, parseArgs, ctx.stdin, ctx.stdout)
 		},
@@ -312,6 +313,10 @@ func newConfigCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 	root := &cobra.Command{
 		Use:   cmdConfig,
 		Short: "Manage config",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
 	}
 	root.AddCommand(
 		&cobra.Command{
@@ -333,6 +338,31 @@ func newConfigCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 					return err
 				}
 				return runConfig(ctx.opts, []string{configSet, args[0], args[1]}, ctx.stdout)
+			},
+		},
+	)
+	return root
+}
+
+func newProfileCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	root := &cobra.Command{
+		Use:   cmdProfile,
+		Short: "Manage stored profiles",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	root.AddCommand(
+		&cobra.Command{
+			Use:   profileList,
+			Short: "List stored profiles",
+			Args:  cobra.NoArgs,
+			RunE: func(*cobra.Command, []string) error {
+				if err := preflight(); err != nil {
+					return err
+				}
+				return runProfile(ctx.opts, []string{profileList}, ctx.stdout)
 			},
 		},
 	)
@@ -438,6 +468,10 @@ func newPasswordCommand(ctx *runtimeContext, preflight func() error) *cobra.Comm
 	root := &cobra.Command{
 		Use:   cmdPassword,
 		Short: "Password management operations",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
 	}
 	change := newPasswordChangeCommand(ctx, preflight)
 	root.AddCommand(change)
@@ -448,6 +482,10 @@ func newDirenvCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 	root := &cobra.Command{
 		Use:   cmdDirenv,
 		Short: "direnv-focused helpers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
 	}
 
 	withScopeComments := true
@@ -521,11 +559,11 @@ func newPasswordChangeCommand(ctx *runtimeContext, preflight func() error) *cobr
 }
 
 func defaultGlobalOptions() (globalOptions, error) {
-	cwd, err := os.Getwd()
+	cwd, err := getWorkingDirectory()
 	if err != nil {
 		return globalOptions{}, fmt.Errorf("resolve cwd: %w", err)
 	}
-	home, err := os.UserHomeDir()
+	home, err := getUserHomeDir()
 	if err != nil {
 		return globalOptions{}, fmt.Errorf("resolve home dir: %w", err)
 	}

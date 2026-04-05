@@ -18,31 +18,15 @@ func TestNormalizePathInput_DirenvPrefix(t *testing.T) {
 	}
 }
 
-func TestParseGlobalOptions_PathCleanTrailingSlash(t *testing.T) {
-	pathWithSlash := "/tmp/project/"
-	opts, rest, err := parseGlobalOptions([]string{
-		"--path", pathWithSlash,
-		"--kinko-dir", "/tmp/kinko-data",
-		"version",
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestFinalizeGlobalOptions_PathCleanTrailingSlash(t *testing.T) {
+	opts := globalOptions{
+		profile:           defaultProfile,
+		path:              "/tmp/project/",
+		dataDir:           "/tmp/kinko-data",
+		configPath:        "/tmp/bootstrap.toml",
+		keychainPreflight: "required",
 	}
-	if len(rest) != 1 || rest[0] != "version" {
-		t.Fatalf("unexpected rest args: %#v", rest)
-	}
-	want := filepath.Clean("/tmp/project")
-	if opts.path != want {
-		t.Fatalf("opts.path=%q want=%q", opts.path, want)
-	}
-}
-
-func TestParseGlobalOptions_PathFromDirenvFormat(t *testing.T) {
-	opts, _, err := parseGlobalOptions([]string{
-		"--path", "-/tmp/project",
-		"--kinko-dir", "/tmp/kinko-data",
-		"version",
-	})
+	err := finalizeGlobalOptions(&opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,11 +36,33 @@ func TestParseGlobalOptions_PathFromDirenvFormat(t *testing.T) {
 	}
 }
 
-func TestParseGlobalOptions_KinkoDirSet(t *testing.T) {
-	opts, _, err := parseGlobalOptions([]string{
-		"--kinko-dir", "/tmp/new",
-		"version",
-	})
+func TestFinalizeGlobalOptions_PathFromDirenvFormat(t *testing.T) {
+	opts := globalOptions{
+		profile:           defaultProfile,
+		path:              "-/tmp/project",
+		dataDir:           "/tmp/kinko-data",
+		configPath:        "/tmp/bootstrap.toml",
+		keychainPreflight: "required",
+	}
+	err := finalizeGlobalOptions(&opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Clean("/tmp/project")
+	if opts.path != want {
+		t.Fatalf("opts.path=%q want=%q", opts.path, want)
+	}
+}
+
+func TestFinalizeGlobalOptions_KinkoDirSet(t *testing.T) {
+	opts := globalOptions{
+		profile:           defaultProfile,
+		path:              "/tmp/project",
+		dataDir:           "/tmp/new",
+		configPath:        "/tmp/bootstrap.toml",
+		keychainPreflight: "required",
+	}
+	err := finalizeGlobalOptions(&opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,11 +72,15 @@ func TestParseGlobalOptions_KinkoDirSet(t *testing.T) {
 	}
 }
 
-func TestParseGlobalOptions_ConfigPathSet(t *testing.T) {
-	opts, _, err := parseGlobalOptions([]string{
-		"--config", "/tmp/custom-bootstrap.toml",
-		"version",
-	})
+func TestFinalizeGlobalOptions_ConfigPathSet(t *testing.T) {
+	opts := globalOptions{
+		profile:           defaultProfile,
+		path:              "/tmp/project",
+		dataDir:           "/tmp/kinko-data",
+		configPath:        "/tmp/custom-bootstrap.toml",
+		keychainPreflight: "required",
+	}
+	err := finalizeGlobalOptions(&opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +90,15 @@ func TestParseGlobalOptions_ConfigPathSet(t *testing.T) {
 	}
 }
 
-func TestParseGlobalOptions_KeychainPreflightSet(t *testing.T) {
-	opts, _, err := parseGlobalOptions([]string{
-		"--keychain-preflight", "off",
-		"version",
-	})
+func TestFinalizeGlobalOptions_KeychainPreflightSet(t *testing.T) {
+	opts := globalOptions{
+		profile:           defaultProfile,
+		path:              "/tmp/project",
+		dataDir:           "/tmp/kinko-data",
+		configPath:        "/tmp/bootstrap.toml",
+		keychainPreflight: "off",
+	}
+	err := finalizeGlobalOptions(&opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,13 +107,35 @@ func TestParseGlobalOptions_KeychainPreflightSet(t *testing.T) {
 	}
 }
 
-func TestParseGlobalOptions_KeychainPreflightInvalid(t *testing.T) {
-	_, _, err := parseGlobalOptions([]string{
-		"--keychain-preflight", "invalid",
-		"version",
-	})
+func TestFinalizeGlobalOptions_KeychainPreflightInvalid(t *testing.T) {
+	opts := globalOptions{
+		profile:           defaultProfile,
+		path:              "/tmp/project",
+		dataDir:           "/tmp/kinko-data",
+		configPath:        "/tmp/bootstrap.toml",
+		keychainPreflight: "invalid",
+	}
+	err := finalizeGlobalOptions(&opts)
 	if err == nil {
 		t.Fatal("expected invalid keychain-preflight error")
+	}
+}
+
+func TestRun_ReturnsDefaultGlobalOptionsError(t *testing.T) {
+	originalGetWorkingDirectory := getWorkingDirectory
+	getWorkingDirectory = func() (string, error) {
+		return "", errors.New("cwd unavailable")
+	}
+	t.Cleanup(func() {
+		getWorkingDirectory = originalGetWorkingDirectory
+	})
+
+	err := Run([]string{"version"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected root command construction to fail")
+	}
+	if !strings.Contains(err.Error(), "resolve cwd") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

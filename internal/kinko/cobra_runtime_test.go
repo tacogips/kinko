@@ -102,6 +102,42 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("profile list", func(t *testing.T) {
+		opts := setupUnlockedForSet(t)
+		base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path}
+
+		if err := Run(append(base, "--profile", "default", "set", "DEFAULT_KEY=one"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			t.Fatalf("default set failed: %v", err)
+		}
+		if err := Run(append(base, "--profile", "prod", "set", "PROD_KEY=two"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			t.Fatalf("prod set failed: %v", err)
+		}
+
+		var out bytes.Buffer
+		if err := Run(append(base, "profile", "list"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("profile list failed: %v", err)
+		}
+		if got := strings.TrimSpace(out.String()); got != "default\nprod" {
+			t.Fatalf("unexpected profile list output: %q", got)
+		}
+	})
+
+	t.Run("set-key explicit empty value", func(t *testing.T) {
+		opts := setupUnlockedForSet(t)
+		base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
+
+		var out bytes.Buffer
+		if err := Run(append(base, "set-key", "EMPTY", "--value="), strings.NewReader("ignored\n"), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("set-key failed: %v", err)
+		}
+		if got := valueAtScope(t, opts, "EMPTY"); got != "" {
+			t.Fatalf("EMPTY=%q", got)
+		}
+		if out.String() != "EMPTY set\n" {
+			t.Fatalf("unexpected set-key output: %q", out.String())
+		}
+	})
+
 	t.Run("backup", func(t *testing.T) {
 		opts := setupBackupFixture(t)
 		destDir := t.TempDir()
@@ -293,6 +329,57 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 			t.Fatalf("unexpected explosion error: %v", err)
 		}
 	})
+}
+
+func TestRun_CobraHelpIncludesProfileCommand(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out.String(), "profile") {
+		t.Fatalf("root help missing profile command: %q", out.String())
+	}
+}
+
+func TestRun_CobraHelpForProfileShowsList(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"profile", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out.String(), "list") {
+		t.Fatalf("profile help missing list subcommand: %q", out.String())
+	}
+}
+
+func TestRun_CobraHelpDoesNotExposeImplicitCompletion(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out.String(), "completion") {
+		t.Fatalf("root help should not expose Cobra default completion command: %q", out.String())
+	}
+}
+
+func TestRun_CobraRejectsImplicitCompletionCommand(t *testing.T) {
+	err := Run([]string{"completion"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected unsupported command error")
+	}
+}
+
+func TestRun_CobraRejectsUnknownRootSubcommand(t *testing.T) {
+	err := Run([]string{"frob"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected unsupported command error")
+	}
+}
+
+func TestRun_CobraRejectsUnknownNestedSubcommand(t *testing.T) {
+	err := Run([]string{"profile", "frob"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected unsupported nested command error")
+	}
 }
 
 func TestRun_NoArgs_ShowsCobraHelp(t *testing.T) {
