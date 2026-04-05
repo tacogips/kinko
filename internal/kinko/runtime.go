@@ -105,7 +105,7 @@ func runSet(opts globalOptions, args []string, stdin io.Reader, stdout io.Writer
 }
 
 func runSetKey(opts globalOptions, args []string, stdin io.Reader, stdout io.Writer) error {
-	key, value, shared, err := parseSetKeyArgs(args)
+	key, value, valueProvided, shared, err := parseSetKeyArgs(args)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func runSetKey(opts globalOptions, args []string, stdin io.Reader, stdout io.Wri
 	if err := validateEnvKey(key); err != nil {
 		return err
 	}
-	if value == "" {
+	if !valueProvided {
 		v, err := readLine(stdin)
 		if err != nil {
 			return err
@@ -132,9 +132,10 @@ func runSetKey(opts globalOptions, args []string, stdin io.Reader, stdout io.Wri
 	return runSet(opts, setArgs, strings.NewReader(""), stdout)
 }
 
-func parseSetKeyArgs(args []string) (string, string, bool, error) {
+func parseSetKeyArgs(args []string) (string, string, bool, bool, error) {
 	key := ""
 	value := ""
+	valueProvided := false
 	shared := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -143,25 +144,27 @@ func parseSetKeyArgs(args []string) (string, string, bool, error) {
 			shared = true
 		case a == "--value":
 			if i+1 >= len(args) {
-				return "", "", false, errors.New("set-key requires value for --value")
+				return "", "", false, false, errors.New("set-key requires value for --value")
 			}
 			value = args[i+1]
+			valueProvided = true
 			i++
 		case strings.HasPrefix(a, "--value="):
 			value = strings.TrimPrefix(a, "--value=")
+			valueProvided = true
 		case strings.HasPrefix(a, "-"):
-			return "", "", false, fmt.Errorf("set-key: unknown flag %q", a)
+			return "", "", false, false, fmt.Errorf("set-key: unknown flag %q", a)
 		default:
 			if key != "" {
-				return "", "", false, errors.New("set-key requires a key")
+				return "", "", false, false, errors.New("set-key requires a key")
 			}
 			key = a
 		}
 	}
 	if key == "" {
-		return "", "", false, errors.New("set-key requires a key")
+		return "", "", false, false, errors.New("set-key requires a key")
 	}
-	return key, value, shared, nil
+	return key, value, valueProvided, shared, nil
 }
 
 type setAssignment struct {
@@ -1352,6 +1355,44 @@ func runConfig(opts globalOptions, args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown config subcommand %q", args[0])
 	}
+}
+
+func runProfile(opts globalOptions, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("profile requires subcommand: list")
+	}
+
+	switch args[0] {
+	case profileList:
+		if len(args) != 1 {
+			return errors.New("profile list does not accept positional arguments")
+		}
+
+		dek, err := loadUnlockedDEK(opts.dataDir)
+		if err != nil {
+			return err
+		}
+		vd, err := loadVault(opts.dataDir, dek)
+		if err != nil {
+			return err
+		}
+
+		for _, name := range storedProfileNames(vd) {
+			_, _ = fmt.Fprintln(stdout, name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown profile subcommand %q", args[0])
+	}
+}
+
+func storedProfileNames(vd *vaultData) []string {
+	names := make([]string, 0, len(vd.Profiles))
+	for name := range vd.Profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func runExec(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {

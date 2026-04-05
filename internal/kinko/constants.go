@@ -17,6 +17,7 @@ const (
 	cmdExport    = "export"
 	cmdImport    = "import"
 	cmdExec      = "exec"
+	cmdProfile   = "profile"
 	cmdPassword  = "password"
 	cmdDirenv    = "direnv"
 )
@@ -24,6 +25,10 @@ const (
 const (
 	configShow = "show"
 	configSet  = "set"
+)
+
+const (
+	profileList = "list"
 )
 
 const (

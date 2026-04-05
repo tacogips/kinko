@@ -563,6 +563,7 @@ kinko delete [--shared] --all [--yes|-y]
 kinko explosion
 kinko get <key> [--reveal]
 kinko show [--reveal] [--all-scopes]
+kinko profile list
 kinko config show|set <key> <value>
 kinko export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
 kinko direnv export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...

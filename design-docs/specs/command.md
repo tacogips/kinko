@@ -18,6 +18,16 @@ It stores secrets in encrypted local storage and injects values into child proce
 - Scriptable but safe defaults: machine-readable output should require explicit opt-in
 - `exec` is the default recommended runtime path; `export` is convenience mode
 
+## CLI Metadata Source of Truth
+
+- The Cobra runtime command tree is the canonical definition of subcommands, flags, help text, and examples.
+- Help output must be generated from that same command tree rather than maintained in a second manual structure.
+- New commands or flags are incomplete until both execution and `--help` output are covered by runtime-level regression tests.
+- Duplicate command metadata layers are intentionally avoided because they drift independently and silently hide missing commands.
+- The public command surface must remain explicit. Framework-provided utility commands such as Cobra's default `completion` command are disabled unless they are intentionally designed, documented, and tested as part of kinko itself.
+- Standard help behavior may remain provided by Cobra, but it must not be used to smuggle undocumented product commands into the CLI surface.
+- Help-only parent commands accept zero positional arguments. Unsupported subcommands or stray positional arguments must fail with a non-zero result rather than silently falling back to help output.
+
 ## Subcommands
 
 ### `kinko init`

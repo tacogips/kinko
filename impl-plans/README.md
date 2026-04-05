@@ -48,6 +48,9 @@ Large features are split into multiple related plans with cross-references.
 | `kinko-backup.md` | 2026-03-08 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |
 | `password-change-policy-alignment.md` | 2026-03-08 | `design-docs/specs/design-password-change.md` |
 | `kinko-secure-runtime-mvp.md` | 2026-03-02 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |
+| `cli-command-source-of-truth.md` | 2026-04-05 | `design-docs/specs/command.md#cli-metadata-source-of-truth` |
+| `explicit-cli-surface.md` | 2026-04-05 | `design-docs/specs/command.md#cli-metadata-source-of-truth` |
+| `profile-list.md` | 2026-04-05 | `design-docs/specs/command.md#kinko-profile` |
 
 ## Phase Dependencies (for impl-exec-auto)
 
