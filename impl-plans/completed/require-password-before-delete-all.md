@@ -1,6 +1,6 @@
 # Require Password Before Delete All Implementation Plan
 
-**Status**: In Progress
+**Status**: Completed
 **Design Reference**: `design-docs/specs/architecture.md#kinko-delete---all`, `design-docs/specs/command.md#kinko-delete-key`, `design-docs/specs/design-shared-keys.md#delete-shared-key`
 **Created**: 2026-05-22
 **Last Updated**: 2026-05-22
@@ -117,15 +117,15 @@ No external codex-agent references were provided. This plan uses the local repos
 
 ### 6. Implementation Plan Maintenance
 
-#### `impl-plans/active/require-password-before-delete-all.md`
+#### `impl-plans/completed/require-password-before-delete-all.md`
 
-**Status**: IN_PROGRESS
+**Status**: COMPLETED
 
 **Checklist**:
 - [x] Update task statuses during implementation.
 - [x] Add a progress-log entry for each implementation session.
 - [x] Mark completion criteria only after verification commands pass or failures are documented.
-- [ ] Move to `impl-plans/completed/` only after implementation, documentation, review, and commit workflow steps are done.
+- [x] Move to `impl-plans/completed/` only after implementation, documentation, review, and commit workflow steps are done.
 
 ---
 
@@ -210,6 +210,12 @@ Required behavioral checks:
 **Tasks In Progress**: Completion archive remains pending later commit workflow steps.
 **Blockers**: None.
 **Notes**: Refreshed `README.md` wording and `.agents/skills/kinko-secret-ops/SKILL.md` operational guidance so both repository and skill surfaces document that current-scope and shared `delete --all` require password re-entry even with `--yes`, keep prompts/errors on stderr, leave stdout empty on verification failure, and preserve single-key delete behavior.
+
+### Session: 2026-05-22 23:35
+**Tasks Completed**: Archived completed plan under `impl-plans/completed/`.
+**Tasks In Progress**: None.
+**Blockers**: None.
+**Notes**: Follow-up bookkeeping after the divedra workflow committed and pushed the implementation branch.
 
 ## Addressed Feedback
 
