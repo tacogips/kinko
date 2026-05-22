@@ -405,6 +405,38 @@ func TestRun_DeleteAllRequiresPasswordThroughCobra(t *testing.T) {
 	}
 }
 
+func TestRun_DeleteAllDeclineSkipsPasswordThroughCobra(t *testing.T) {
+	withFakeSessionStore(t)
+
+	opts := setupUnlockedForSet(t)
+	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
+	if err := Run(append(base, "set", "A=one", "B=two"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("set failed: %v", err)
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := Run(append(base, "delete", "--all"), strings.NewReader("n\n"), &out, &errBuf); err != nil {
+		t.Fatalf("delete --all decline failed: %v", err)
+	}
+	if out.String() != "aborted\n" {
+		t.Fatalf("out=%q", out.String())
+	}
+	gotErr := errBuf.String()
+	if strings.Contains(gotErr, "Re-enter password: ") {
+		t.Fatalf("declined delete-all must not prompt for password, got stderr %q", gotErr)
+	}
+	if !strings.Contains(gotErr, "Delete target keys:\n- A\n- B\n") {
+		t.Fatalf("expected target keys before confirmation, got stderr %q", gotErr)
+	}
+	if got := valueAtScope(t, opts, "A"); got != "one" {
+		t.Fatalf("A=%q", got)
+	}
+	if got := valueAtScope(t, opts, "B"); got != "two" {
+		t.Fatalf("B=%q", got)
+	}
+}
+
 func TestRun_DeleteSharedAllRequiresPasswordThroughCobra(t *testing.T) {
 	withFakeSessionStore(t)
 
@@ -435,6 +467,44 @@ func TestRun_DeleteSharedAllRequiresPasswordThroughCobra(t *testing.T) {
 	}
 	if strings.Contains(gotErr, "Delete target keys") || strings.Contains(gotErr, "- A") || strings.Contains(gotErr, "- B") {
 		t.Fatalf("auth failure must not list shared target keys, got stderr %q", gotErr)
+	}
+	if got := valueAtShared(t, opts, "A"); got != "one" {
+		t.Fatalf("A(shared)=%q", got)
+	}
+	if got := valueAtShared(t, opts, "B"); got != "two" {
+		t.Fatalf("B(shared)=%q", got)
+	}
+	if got := valueAtScope(t, opts, "REPO_KEY"); got != "repo" {
+		t.Fatalf("REPO_KEY=%q", got)
+	}
+}
+
+func TestRun_DeleteSharedAllDeclineSkipsPasswordThroughCobra(t *testing.T) {
+	withFakeSessionStore(t)
+
+	opts := setupUnlockedForSet(t)
+	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
+	if err := Run(append(base, "set", "--shared", "A=one", "B=two"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("set shared failed: %v", err)
+	}
+	if err := Run(append(base, "set", "REPO_KEY=repo"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("set failed: %v", err)
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := Run(append(base, "delete", "--shared", "--all"), strings.NewReader("n\n"), &out, &errBuf); err != nil {
+		t.Fatalf("delete --shared --all decline failed: %v", err)
+	}
+	if out.String() != "aborted\n" {
+		t.Fatalf("out=%q", out.String())
+	}
+	gotErr := errBuf.String()
+	if strings.Contains(gotErr, "Re-enter password: ") {
+		t.Fatalf("declined shared delete-all must not prompt for password, got stderr %q", gotErr)
+	}
+	if !strings.Contains(gotErr, "Delete target keys:\n- A\n- B\n") {
+		t.Fatalf("expected shared target keys before confirmation, got stderr %q", gotErr)
 	}
 	if got := valueAtShared(t, opts, "A"); got != "one" {
 		t.Fatalf("A(shared)=%q", got)

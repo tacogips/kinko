@@ -66,7 +66,11 @@ func confirmPrompt(stdin io.Reader, stderr io.Writer, prompt string) (bool, erro
 	if _, err := fmt.Fprint(stderr, prompt); err != nil {
 		return false, err
 	}
-	line, err := bufio.NewReader(stdin).ReadString('\n')
+	reader, ok := stdin.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(stdin)
+	}
+	line, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}

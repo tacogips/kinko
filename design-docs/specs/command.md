@@ -191,9 +191,10 @@ Delete a key from resolved profile/path scope.
 `kinko delete --all` deletes all keys in the resolved scope.
 
 Bulk delete authorization:
-- `kinko delete --all` requires direct vault password verification before loading, listing, confirming, or deleting keys.
-- `kinko delete --shared --all` uses the same password verification requirement before accessing shared keys.
-- `--yes` skips only the destructive confirmation prompt; it must not skip password verification.
+- `kinko delete --all` and `kinko delete --shared --all` ask for destructive confirmation before direct vault password verification in the interactive flow.
+- If the user declines interactive confirmation, the command must preserve the existing aborted stdout, must not prompt for the vault password, and must leave vault data unchanged.
+- If the user confirms, the command must verify the vault password before deleting keys.
+- `--yes` skips only the destructive confirmation prompt; because there is no confirmation step, password verification remains required before loading, listing, or deleting target keys.
 - Password prompts and authentication errors are written to stderr.
 - Failed or canceled password verification must write no stdout and must leave vault data unchanged.
 - Single-key delete behavior is unchanged and does not add this extra password verification requirement.

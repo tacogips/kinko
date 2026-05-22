@@ -19,6 +19,8 @@
 
 Require direct vault password verification for `kinko delete --all` and `kinko delete --shared --all` before vault loading, target-key listing, confirmation prompting, stdout output, or mutation. `--yes` skips only destructive confirmation, never password verification.
 
+**Supersession note (2026-05-23)**: Interactive bulk delete ordering is superseded by `impl-plans/completed/move-delete-all-password-prompt-after-confirmation.md`. The current contract asks for destructive confirmation before password verification when `--yes` is absent, while preserving this plan's password-before-enumeration rule for `--yes`.
+
 ### Scope
 
 **Included**:

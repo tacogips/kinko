@@ -25,7 +25,7 @@ Apply this skill when users ask to:
 - Treat `--force` as high risk and explain why it is needed before using it.
 - Respect scope precedence: repository scope (`--profile` + `--path`) overrides shared scope.
 - For destructive operations (`delete --all`, `delete --shared --all`, `explosion`), require explicit user intent.
-- For bulk deletes, expect direct vault password re-entry even when `--yes` is used; `--yes` skips only the destructive confirmation.
+- For interactive bulk deletes, expect destructive confirmation first and direct vault password re-entry only after confirmation; `--yes` skips only the destructive confirmation, so password verification is still required before loading, listing, or mutation.
 
 ## Quick Workflow
 
@@ -104,8 +104,10 @@ kinko delete --shared --all --yes
 ```
 
 Bulk delete behavior:
-- `kinko delete --all` and `kinko delete --shared --all` prompt on stderr for vault password re-entry before target keys are loaded, listed, confirmed, or deleted.
-- Failed or canceled password verification leaves stdout empty and keeps vault data unchanged.
+- `kinko delete --all` and `kinko delete --shared --all` list target keys, ask for destructive confirmation, then prompt on stderr for vault password re-entry only after confirmation.
+- Declined confirmation prints `aborted`, does not prompt for the vault password, and keeps vault data unchanged.
+- With `--yes`, confirmation is skipped and password verification still happens before target keys are loaded, listed, or deleted.
+- Failed password verification leaves stdout empty and keeps vault data unchanged.
 - Single-key deletes such as `kinko delete API_KEY --yes` do not add this extra password verification step.
 
 ## Troubleshooting

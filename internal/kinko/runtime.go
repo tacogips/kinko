@@ -228,11 +228,14 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 	}
 
 	confirmationInput := stdin
+	var passwordInput passwordVerificationInput
 	if deleteAll {
-		var err error
-		confirmationInput, err = verifyVaultPasswordForBulkDelete(opts, stdin, stderr)
-		if err != nil {
-			return err
+		passwordInput = passwordVerificationInputFor(stdin, isTerminalReader)
+		confirmationInput = passwordInput.confirmationInput
+		if autoYes {
+			if err := verifyVaultPasswordForBulkDelete(opts, passwordInput, stderr); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -284,6 +287,9 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 			if !ok {
 				_, _ = fmt.Fprintln(stdout, "aborted")
 				return nil
+			}
+			if err := verifyVaultPasswordForBulkDelete(opts, passwordInput, stderr); err != nil {
+				return err
 			}
 		}
 		if shared {
@@ -552,8 +558,8 @@ func verifyExplosionPassword(opts globalOptions, reader *bufio.Reader, stderr io
 	return verifyVaultPasswordValue(opts, password)
 }
 
-func verifyVaultPasswordForBulkDelete(opts globalOptions, stdin io.Reader, stderr io.Writer) (io.Reader, error) {
-	return verifyVaultPasswordForShow(opts, stdin, stderr, "Re-enter password: ")
+func verifyVaultPasswordForBulkDelete(opts globalOptions, input passwordVerificationInput, stderr io.Writer) error {
+	return verifyVaultPasswordFromInput(opts, input, stderr, "Re-enter password: ")
 }
 
 type passwordVerificationInput struct {
@@ -579,6 +585,13 @@ func passwordVerificationInputFor(stdin io.Reader, isTerminal func(io.Reader) bo
 
 func verifyVaultPasswordForShow(opts globalOptions, stdin io.Reader, stderr io.Writer, prompt string) (io.Reader, error) {
 	input := passwordVerificationInputFor(stdin, isTerminalReader)
+	if err := verifyVaultPasswordFromInput(opts, input, stderr, prompt); err != nil {
+		return nil, err
+	}
+	return input.confirmationInput, nil
+}
+
+func verifyVaultPasswordFromInput(opts globalOptions, input passwordVerificationInput, stderr io.Writer, prompt string) error {
 	var password string
 	var err error
 	if input.terminalSecret {
@@ -587,9 +600,9 @@ func verifyVaultPasswordForShow(opts globalOptions, stdin io.Reader, stderr io.W
 		password, err = readSecretWithPromptBuffered(input.secretInput.(*bufio.Reader), stderr, prompt)
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return input.confirmationInput, verifyVaultPasswordValue(opts, password)
+	return verifyVaultPasswordValue(opts, password)
 }
 
 func verifyVaultPasswordValue(opts globalOptions, password string) error {
