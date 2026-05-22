@@ -237,6 +237,31 @@ Import confidentiality constraints:
 - Value display requires explicit opt-in (`--confirm-with-values`).
 - Value-bearing confirmation output on `stderr` must follow sensitive-output guardrails (`--force` required for non-TTY redirection).
 
+### `kinko delete --all`
+
+Bulk delete is a destructive scope-wide mutation and requires direct vault password verification before any scope enumeration or mutation.
+
+Authorization order for both current profile/path scope and `--shared` scope:
+1. Parse flags and reject invalid argument combinations without loading vault contents.
+2. Read and verify the current vault password using stderr for prompts and errors.
+   - Verification unwraps the persisted password-wrapped DEK metadata directly.
+   - An already-unlocked session is not sufficient for this authorization step.
+3. After successful verification, acquire the mutation lock.
+4. Verify unlocked session and load the vault.
+5. Resolve the delete target scope:
+   - current profile/path when `--shared` is not set
+   - vault-wide shared map when `--shared` is set
+6. If `--yes` is absent, list target key names on stderr and ask for destructive confirmation.
+7. Delete the selected scope and atomically persist the vault.
+8. Write the success message to stdout only after persistence succeeds.
+
+Failure rules:
+- Failed or canceled password verification stops before vault loading, key listing, confirmation prompting, or mutation.
+- Failed password verification must leave stdout empty and vault data unchanged.
+- `--yes` bypasses only the confirmation step; it does not alter authentication order.
+- Empty-scope errors occur only after successful password verification because existence of keys is scope metadata.
+- Single-key delete keeps the existing session-gated behavior and is not upgraded to direct password verification by this design.
+
 ### `kinko exec -- cmd`
 
 1. Resolve `profile`, `path`

@@ -263,7 +263,7 @@ func TestRunDelete_SharedAll(t *testing.T) {
 
 	out.Reset()
 	var errBuf bytes.Buffer
-	if err := runDelete(opts, []string{"--shared", "--all", "--yes"}, strings.NewReader(""), &out, &errBuf); err != nil {
+	if err := runDelete(opts, []string{"--shared", "--all", "--yes"}, strings.NewReader("pw\n"), &out, &errBuf); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "deleted all\n" {
@@ -285,6 +285,80 @@ func TestRunDelete_SharedAll(t *testing.T) {
 	}
 }
 
+func TestRunDelete_AllWrongPasswordLeavesDataUnchanged(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var out bytes.Buffer
+	if err := runSet(opts, []string{"A=1", "B=2"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	var errBuf bytes.Buffer
+	err := runDelete(opts, []string{"--all", "--yes"}, strings.NewReader("wrong\n"), &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected password verification failure")
+	}
+	if !strings.Contains(err.Error(), "password verification failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no stdout on auth failure, got %q", out.String())
+	}
+	gotErr := errBuf.String()
+	if !strings.Contains(gotErr, "Re-enter password: ") {
+		t.Fatalf("expected password prompt on stderr, got %q", gotErr)
+	}
+	if strings.Contains(gotErr, "Delete target keys") || strings.Contains(gotErr, "- A") || strings.Contains(gotErr, "- B") {
+		t.Fatalf("auth failure must not list target keys, got stderr %q", gotErr)
+	}
+	if got := valueAtScope(t, opts, "A"); got != "1" {
+		t.Fatalf("A=%q", got)
+	}
+	if got := valueAtScope(t, opts, "B"); got != "2" {
+		t.Fatalf("B=%q", got)
+	}
+}
+
+func TestRunDelete_SharedAllWrongPasswordLeavesDataUnchanged(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var out bytes.Buffer
+	if err := runSet(opts, []string{"--shared", "A=1", "B=2"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSet(opts, []string{"REPO_KEY=repo"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	var errBuf bytes.Buffer
+	err := runDelete(opts, []string{"--shared", "--all", "--yes"}, strings.NewReader("wrong\n"), &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected password verification failure")
+	}
+	if !strings.Contains(err.Error(), "password verification failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no stdout on auth failure, got %q", out.String())
+	}
+	gotErr := errBuf.String()
+	if !strings.Contains(gotErr, "Re-enter password: ") {
+		t.Fatalf("expected password prompt on stderr, got %q", gotErr)
+	}
+	if strings.Contains(gotErr, "Delete target keys") || strings.Contains(gotErr, "- A") || strings.Contains(gotErr, "- B") {
+		t.Fatalf("auth failure must not list shared target keys, got stderr %q", gotErr)
+	}
+	if got := valueAtShared(t, opts, "A"); got != "1" {
+		t.Fatalf("A(shared)=%q", got)
+	}
+	if got := valueAtShared(t, opts, "B"); got != "2" {
+		t.Fatalf("B(shared)=%q", got)
+	}
+	if got := valueAtScope(t, opts, "REPO_KEY"); got != "repo" {
+		t.Fatalf("REPO_KEY=%q", got)
+	}
+}
+
 func TestRunDelete_AllShowsTargetKeysBeforeConfirm(t *testing.T) {
 	opts := setupUnlockedForSet(t)
 	var out bytes.Buffer
@@ -294,13 +368,16 @@ func TestRunDelete_AllShowsTargetKeysBeforeConfirm(t *testing.T) {
 
 	out.Reset()
 	var errBuf bytes.Buffer
-	if err := runDelete(opts, []string{"--all"}, strings.NewReader("y\n"), &out, &errBuf); err != nil {
+	if err := runDelete(opts, []string{"--all"}, strings.NewReader("pw\ny\n"), &out, &errBuf); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "deleted all\n" {
 		t.Fatalf("out=%q", out.String())
 	}
 	gotErr := errBuf.String()
+	if !strings.Contains(gotErr, "Re-enter password: ") {
+		t.Fatalf("expected password prompt in stderr, got %q", gotErr)
+	}
 	if !strings.Contains(gotErr, "Delete target keys:\n- A\n- Z\n") {
 		t.Fatalf("expected sorted delete target keys in stderr, got %q", gotErr)
 	}
@@ -318,13 +395,16 @@ func TestRunDelete_SharedAllShowsTargetKeysBeforeConfirm(t *testing.T) {
 
 	out.Reset()
 	var errBuf bytes.Buffer
-	if err := runDelete(opts, []string{"--shared", "--all"}, strings.NewReader("y\n"), &out, &errBuf); err != nil {
+	if err := runDelete(opts, []string{"--shared", "--all"}, strings.NewReader("pw\ny\n"), &out, &errBuf); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "deleted all\n" {
 		t.Fatalf("out=%q", out.String())
 	}
 	gotErr := errBuf.String()
+	if !strings.Contains(gotErr, "Re-enter password: ") {
+		t.Fatalf("expected password prompt in stderr, got %q", gotErr)
+	}
 	if !strings.Contains(gotErr, "Delete target keys:\n- A\n- B\n") {
 		t.Fatalf("expected sorted shared delete target keys in stderr, got %q", gotErr)
 	}

@@ -39,7 +39,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
-| (No active plans yet) | - | - | - |
+| `require-password-before-delete-all.md` | In Progress | `design-docs/specs/architecture.md#kinko-delete---all` | 2026-05-22 |
 
 ## Completed Plans
 

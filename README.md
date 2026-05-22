@@ -351,6 +351,10 @@ kinko delete --shared GITHUB_TOKEN --yes
 kinko delete --shared --all --yes
 ```
 
+Bulk deletes in either repository scope or shared scope require vault password re-entry before any target keys are loaded or listed.
+`--yes` skips only the delete confirmation; it does not skip password verification for `delete --all` or `delete --shared --all`.
+If password verification fails, `kinko` leaves stdout empty, does not reveal target keys, and keeps vault data unchanged.
+
 ### Set / Get / Show
 
 ```bash
@@ -375,6 +379,7 @@ kinko explosion
 Note:
 - `kinko show` prints grouped sections for the selected scope (`# shared` and `# path=<resolved path>`).
 - `kinko show --all-scopes` requires vault password re-entry before any output, enumerates all path scopes in the selected profile, and ignores `--path`.
+- `kinko delete --all` and `kinko delete --shared --all` require vault password re-entry even when `--yes` is present.
 
 ### Export for Shell
 

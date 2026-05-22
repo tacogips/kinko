@@ -227,6 +227,15 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 		return errors.New("delete requires a key or --all")
 	}
 
+	confirmationInput := stdin
+	if deleteAll {
+		var err error
+		confirmationInput, err = verifyVaultPasswordForBulkDelete(opts, stdin, stderr)
+		if err != nil {
+			return err
+		}
+	}
+
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
 		return fmt.Errorf("vault mutation in progress: %w", err)
@@ -268,7 +277,7 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 			if shared {
 				msg = fmt.Sprintf("Delete all %d keys in shared scope? [y/N]: ", len(scope))
 			}
-			ok, err := confirmPrompt(stdin, stderr, msg)
+			ok, err := confirmPrompt(confirmationInput, stderr, msg)
 			if err != nil {
 				return err
 			}
@@ -541,6 +550,10 @@ func verifyExplosionPassword(opts globalOptions, reader *bufio.Reader, stderr io
 		return err
 	}
 	return verifyVaultPasswordValue(opts, password)
+}
+
+func verifyVaultPasswordForBulkDelete(opts globalOptions, stdin io.Reader, stderr io.Writer) (io.Reader, error) {
+	return verifyVaultPasswordForShow(opts, stdin, stderr, "Re-enter password: ")
 }
 
 type passwordVerificationInput struct {

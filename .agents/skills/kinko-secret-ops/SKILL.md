@@ -24,7 +24,8 @@ Apply this skill when users ask to:
 - Prefer `kinko exec` for runtime injection instead of persistent shell export.
 - Treat `--force` as high risk and explain why it is needed before using it.
 - Respect scope precedence: repository scope (`--profile` + `--path`) overrides shared scope.
-- For destructive operations (`delete --all`, `explosion`), require explicit user intent.
+- For destructive operations (`delete --all`, `delete --shared --all`, `explosion`), require explicit user intent.
+- For bulk deletes, expect direct vault password re-entry even when `--yes` is used; `--yes` skips only the destructive confirmation.
 
 ## Quick Workflow
 
@@ -101,6 +102,11 @@ Delete all keys in selected scope:
 kinko delete --all --yes
 kinko delete --shared --all --yes
 ```
+
+Bulk delete behavior:
+- `kinko delete --all` and `kinko delete --shared --all` prompt on stderr for vault password re-entry before target keys are loaded, listed, confirmed, or deleted.
+- Failed or canceled password verification leaves stdout empty and keeps vault data unchanged.
+- Single-key deletes such as `kinko delete API_KEY --yes` do not add this extra password verification step.
 
 ## Troubleshooting
 

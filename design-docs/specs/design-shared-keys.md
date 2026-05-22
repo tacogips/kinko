@@ -80,6 +80,12 @@ Add `--shared` support for delete flows:
 
 Without `--shared`, deletion remains repository-specific.
 
+Shared bulk deletion is protected the same way as repository-scoped bulk deletion:
+- `kinko delete --shared --all` must verify the vault password before loading, listing, confirming, or deleting shared keys.
+- `--yes` skips only the shared delete confirmation prompt; password verification is still mandatory.
+- Failed password verification must not reveal whether shared keys exist and must leave stdout empty.
+- `kinko delete --shared KEY` remains a single-key delete and does not require the extra bulk-delete password verification step.
+
 ## Export Format
 
 `export` outputs scope-separated blocks:

@@ -190,6 +190,14 @@ kinko show --all-scopes
 Delete a key from resolved profile/path scope.
 `kinko delete --all` deletes all keys in the resolved scope.
 
+Bulk delete authorization:
+- `kinko delete --all` requires direct vault password verification before loading, listing, confirming, or deleting keys.
+- `kinko delete --shared --all` uses the same password verification requirement before accessing shared keys.
+- `--yes` skips only the destructive confirmation prompt; it must not skip password verification.
+- Password prompts and authentication errors are written to stderr.
+- Failed or canceled password verification must write no stdout and must leave vault data unchanged.
+- Single-key delete behavior is unchanged and does not add this extra password verification requirement.
+
 Shared scope:
 - `kinko delete --shared <key>` deletes from shared scope.
 - `kinko delete --shared --all` deletes all shared keys.
