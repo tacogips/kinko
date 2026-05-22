@@ -172,6 +172,8 @@ Important semantics:
 Extended scope view:
 - `--all-scopes` shows grouped entries for the current profile across all stored paths, plus shared scope.
 - Intended as an inspection view; no cross-profile aggregation.
+- Requires password verification before any output because it may display scopes outside the current directory, including when values are masked.
+- A verified unlocked session alone is not enough for this command mode; the user must re-enter the vault password for the cross-scope display.
 - Detailed format/semantics are documented in the dedicated `show --all-scopes` design spec.
 
 Examples:

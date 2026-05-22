@@ -17,6 +17,7 @@ This document defines `kinko show` and `kinko show --all-scopes` grouped-scope b
 
 - Provide one-command visibility into all stored keys for the current profile.
 - Keep safe defaults (masked output by default).
+- Require password verification before displaying any non-current-directory scope data.
 - Preserve existing reveal guardrails for plaintext output.
 - Provide deterministic, grep-friendly text output grouped by scope.
 
@@ -43,6 +44,7 @@ Scope semantics:
 - Output includes:
   1. shared scope
   2. all repository paths in that profile
+- `--all-scopes` is a non-current-directory display mode and must verify the vault password before writing any output, even when output remains masked.
 - For backward compatibility, extra non-flag positional tokens are ignored (same as existing `show` behavior).
 
 Path semantics:
@@ -82,9 +84,20 @@ Value rendering:
 
 ## Security and Guardrails
 
+- `show --all-scopes` must require explicit password verification before any profile header, section header, key name, masked value, or plaintext value is written to stdout.
+- Password verification must authenticate directly against the persisted vault metadata; an existing unlocked session alone is not sufficient for this cross-scope display authorization.
+- Password prompts and verification errors must be written to stderr so stdout remains reserved for secret display output.
+- Failed or canceled password verification must stop the command before scope enumeration output and must not reveal whether keys or path scopes exist.
+- Current-scope-only `show` behavior is unchanged and must not require this extra password verification.
 - `--reveal` with `--all-scopes` must use the same sensitive-output guardrail as current `show --reveal`.
 - Non-TTY or redirected output remains blocked unless global override (`--force`) is provided.
 - Confirmation flow behavior remains unchanged from existing sensitive output flows.
+
+Authorization order for `show --all-scopes`:
+1. Parse command flags and resolve global options.
+2. Verify the password using stderr for prompts and errors.
+3. Apply the sensitive-output guardrail when `--reveal` is set.
+4. Load, validate, normalize, and render all-scopes output.
 
 ## Data Access Semantics
 
@@ -102,6 +115,7 @@ Note:
 
 ## Error Handling
 
+- If password verification fails, return a password-authentication error and write no stdout.
 - If profile has no entries and shared is empty, output still prints:
   - `# profile=<profile>`
   - `# shared`
@@ -111,6 +125,10 @@ Note:
 
 ## Testing Strategy (Design-Level)
 
+- `show --all-scopes` with no valid password fails before stdout output.
+- `show --all-scopes` with valid password prints the expected masked grouped output.
+- `show --all-scopes --reveal` requires password verification and then still applies the sensitive-output guardrail.
+- Current-scope-only `show` remains unchanged and does not require the all-scopes password verification path.
 - `show --all-scopes` prints `# profile=<profile>` and `# shared` headers.
 - Path sections are present for all stored paths in profile and sorted.
 - Keys in each section are sorted.

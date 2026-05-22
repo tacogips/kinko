@@ -331,6 +331,44 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 	})
 }
 
+func TestRun_ShowAllScopesRequiresPasswordThroughCobra(t *testing.T) {
+	withFakeSessionStore(t)
+
+	opts := setupUnlockedForSet(t)
+	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
+	if err := Run(append(base, "set", "--shared", "SHARED_ONLY=shared"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("set shared failed: %v", err)
+	}
+
+	var failedOut bytes.Buffer
+	var failedErr bytes.Buffer
+	err := Run(append(base, "show", "--all-scopes"), strings.NewReader("wrong\n"), &failedOut, &failedErr)
+	if err == nil {
+		t.Fatal("expected all-scopes password verification failure")
+	}
+	if !strings.Contains(err.Error(), "password verification failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if failedOut.Len() != 0 {
+		t.Fatalf("expected no stdout on auth failure, got %q", failedOut.String())
+	}
+	if !strings.Contains(failedErr.String(), "Re-enter password: ") {
+		t.Fatalf("expected password prompt on stderr, got %q", failedErr.String())
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := Run(append(base, "show", "--all-scopes"), strings.NewReader("pw\n"), &out, &errBuf); err != nil {
+		t.Fatalf("show all-scopes failed after password verification: %v", err)
+	}
+	if !strings.Contains(out.String(), "# profile=default\n\n# shared\n") || !strings.Contains(out.String(), "SHARED_ONLY=") {
+		t.Fatalf("unexpected all-scopes output: %q", out.String())
+	}
+	if !strings.Contains(errBuf.String(), "Re-enter password: ") {
+		t.Fatalf("expected password prompt on stderr, got %q", errBuf.String())
+	}
+}
+
 func TestRun_CobraHelpIncludesProfileCommand(t *testing.T) {
 	var out bytes.Buffer
 	if err := Run([]string{"--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {

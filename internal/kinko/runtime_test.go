@@ -1,7 +1,9 @@
 package kinko
 
 import (
+	"bufio"
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -496,9 +498,148 @@ func TestRunShow_DefaultViewGroupsSharedAndResolvedPathScopes(t *testing.T) {
 	}
 }
 
+func runShowWithPasswordForTest(t *testing.T, opts globalOptions, args []string, stdout, stderr *bytes.Buffer) error {
+	t.Helper()
+	return runShow(opts, args, strings.NewReader("pw\n"), stdout, stderr)
+}
+
+func TestPasswordVerificationInputForUsesTerminalSecretReader(t *testing.T) {
+	stdin := strings.NewReader("pw\n")
+	input := passwordVerificationInputFor(stdin, func(io.Reader) bool { return true })
+	if !input.terminalSecret {
+		t.Fatal("expected terminal secret reader mode")
+	}
+	if input.secretInput != stdin {
+		t.Fatal("terminal mode must use original stdin for hidden password reading")
+	}
+	if input.confirmationInput != stdin {
+		t.Fatal("terminal mode must leave later prompts on original stdin")
+	}
+}
+
+func TestPasswordVerificationInputForBuffersNonTerminalInput(t *testing.T) {
+	stdin := strings.NewReader("pw\ny\n")
+	input := passwordVerificationInputFor(stdin, func(io.Reader) bool { return false })
+	if input.terminalSecret {
+		t.Fatal("expected buffered non-terminal reader mode")
+	}
+	reader, ok := input.secretInput.(*bufio.Reader)
+	if !ok {
+		t.Fatalf("expected buffered secret reader, got %T", input.secretInput)
+	}
+	if input.confirmationInput != reader {
+		t.Fatal("non-terminal mode must reuse buffered reader for later prompts")
+	}
+	password, err := readSecretWithPromptBuffered(reader, &bytes.Buffer{}, "Password: ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if password != "pw" {
+		t.Fatalf("password=%q want pw", password)
+	}
+	ok, err = confirmPrompt(input.confirmationInput, &bytes.Buffer{}, "Confirm? ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected confirmation input to remain buffered after password read")
+	}
+}
+
+func TestRunShow_AllScopes_RequiresPasswordBeforeOutput(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var setupOut bytes.Buffer
+	if err := runSet(opts, []string{"--shared", "SECRET=shared"}, strings.NewReader(""), &setupOut); err != nil {
+		t.Fatal(err)
+	}
+
+	pathScope := opts
+	pathScope.path = filepath.Join(t.TempDir(), "scope")
+	if err := runSet(pathScope, []string{"PATH_SECRET=repo"}, strings.NewReader(""), &setupOut); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		stdin       string
+		wantErrText string
+	}{
+		{name: "wrong password", stdin: "wrong\n", wantErrText: "password verification failed"},
+		{name: "missing password", stdin: "", wantErrText: "empty secret not allowed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			var errBuf bytes.Buffer
+			err := runShow(opts, []string{"--all-scopes"}, strings.NewReader(tc.stdin), &out, &errBuf)
+			if err == nil {
+				t.Fatal("expected password verification error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErrText) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("expected no stdout on auth failure, got %q", out.String())
+			}
+			if !strings.Contains(errBuf.String(), "Re-enter password: ") {
+				t.Fatalf("expected password prompt on stderr, got %q", errBuf.String())
+			}
+		})
+	}
+}
+
+func TestRunShow_CurrentScopeDoesNotRequirePasswordPrompt(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+
+	if err := runSet(opts, []string{"A=repo-a"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if err := runShow(opts, []string{}, strings.NewReader("wrong-password\n"), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "A=") {
+		t.Fatalf("expected current-scope show output, got %q", out.String())
+	}
+	if errBuf.Len() != 0 {
+		t.Fatalf("current-scope show should not prompt for password, got stderr %q", errBuf.String())
+	}
+}
+
+func TestRunShow_AllScopesRevealVerifiesPasswordBeforeRedirectGuard(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var setupOut bytes.Buffer
+	if err := runSet(opts, []string{"--shared", "S=shared"}, strings.NewReader(""), &setupOut); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	err := runShow(opts, []string{"--all-scopes", "--reveal"}, strings.NewReader("wrong\n"), &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected password verification error")
+	}
+	if !strings.Contains(err.Error(), "password verification failed") {
+		t.Fatalf("expected password verification before reveal guard, got %v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive output blocked") {
+		t.Fatalf("reveal guard ran before password verification: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no stdout on auth failure, got %q", out.String())
+	}
+	if !strings.Contains(errBuf.String(), "Re-enter password: ") {
+		t.Fatalf("expected password prompt on stderr, got %q", errBuf.String())
+	}
+}
+
 func TestRunShow_AllScopes_MaskedAndSortedByPathAndKey(t *testing.T) {
 	opts := setupUnlockedForSet(t)
 	var out bytes.Buffer
+	var errBuf bytes.Buffer
 	base := t.TempDir()
 	pathAValue := filepath.Join(base, "a")
 	pathBValue := filepath.Join(base, "b")
@@ -519,8 +660,11 @@ func TestRunShow_AllScopes_MaskedAndSortedByPathAndKey(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+	if err := runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &errBuf); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(errBuf.String(), "Re-enter password: ") {
+		t.Fatalf("expected password prompt on stderr, got %q", errBuf.String())
 	}
 	got := out.String()
 	if !strings.HasPrefix(got, "# profile=default\n\n# shared\n") {
@@ -564,7 +708,7 @@ func TestRunShow_AllScopes_RevealShowsPlaintext(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := runShow(opts, []string{"--all-scopes", "--reveal"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+	if err := runShowWithPasswordForTest(t, opts, []string{"--all-scopes", "--reveal"}, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -585,7 +729,7 @@ func TestRunShow_AllScopes_RevealBlockedWithoutForceOnRedirectedOutput(t *testin
 		t.Fatal(err)
 	}
 	out.Reset()
-	err := runShow(opts, []string{"--all-scopes", "--reveal"}, strings.NewReader(""), &out, &errBuf)
+	err := runShowWithPasswordForTest(t, opts, []string{"--all-scopes", "--reveal"}, &out, &errBuf)
 	if err == nil {
 		t.Fatal("expected reveal guard error")
 	}
@@ -599,7 +743,7 @@ func TestRunShow_AllScopes_EmptyProfileStillPrintsProfileAndSharedHeaders(t *tes
 
 	var out bytes.Buffer
 	var errBuf bytes.Buffer
-	if err := runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &errBuf); err != nil {
+	if err := runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &errBuf); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -609,8 +753,8 @@ func TestRunShow_AllScopes_EmptyProfileStillPrintsProfileAndSharedHeaders(t *tes
 	if strings.Contains(got, "# path=") {
 		t.Fatalf("unexpected path section for empty profile output: %q", got)
 	}
-	if errBuf.Len() != 0 {
-		t.Fatalf("expected no warning stderr, got %q", errBuf.String())
+	if errBuf.String() != "Re-enter password: " {
+		t.Fatalf("expected password prompt only on stderr, got %q", errBuf.String())
 	}
 }
 
@@ -639,7 +783,7 @@ func TestRunShow_AllScopes_OmitsEmptyPathSections(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+	if err := runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -676,7 +820,7 @@ func TestRunShow_AllScopes_NormalizesPathHeadersAndSortOrder(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+	if err := runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -713,7 +857,7 @@ func TestRunShow_AllScopes_IgnoresPathOption(t *testing.T) {
 	showOpts := opts
 	showOpts.path = unrelatedPath
 	out.Reset()
-	if err := runShow(showOpts, []string{"--all-scopes"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+	if err := runShowWithPasswordForTest(t, showOpts, []string{"--all-scopes"}, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -746,7 +890,7 @@ func TestRunShow_AllScopes_RejectsRelativeStoredPaths(t *testing.T) {
 	}
 	var out bytes.Buffer
 	var errBuf bytes.Buffer
-	err = runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &errBuf)
+	err = runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &errBuf)
 	if err == nil {
 		t.Fatal("expected relative stored path rejection")
 	}
@@ -756,8 +900,8 @@ func TestRunShow_AllScopes_RejectsRelativeStoredPaths(t *testing.T) {
 	if out.Len() != 0 {
 		t.Fatalf("expected no stdout on error, got %q", out.String())
 	}
-	if errBuf.Len() != 0 {
-		t.Fatalf("expected no stderr warning output, got %q", errBuf.String())
+	if errBuf.String() != "Re-enter password: " {
+		t.Fatalf("expected password prompt only on stderr, got %q", errBuf.String())
 	}
 }
 
@@ -797,7 +941,7 @@ func TestRunShow_AllScopes_IgnoresPositionalArgs(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := runShow(opts, []string{"--all-scopes", "ignored-arg"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+	if err := runShowWithPasswordForTest(t, opts, []string{"--all-scopes", "ignored-arg"}, &out, &bytes.Buffer{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := out.String()
@@ -830,7 +974,7 @@ func TestRunShow_AllScopes_RejectsCollidingNormalizedStoredPaths(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err = runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &bytes.Buffer{})
+	err = runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("expected normalized-path collision rejection")
 	}
@@ -866,7 +1010,7 @@ func TestRunShow_AllScopes_AllowsCaseVariantPathsAsDistinctScopes(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	err = runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &bytes.Buffer{})
+	err = runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -900,7 +1044,7 @@ func TestRunShow_AllScopes_AllowsCaseVariantNonExistentPathsAsDistinctScopes(t *
 	}
 
 	var out bytes.Buffer
-	err = runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &bytes.Buffer{})
+	err = runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -931,7 +1075,7 @@ func TestRunShow_AllScopes_UsesSelectedProfileOnly(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := runShow(opts, []string{"--all-scopes"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+	if err := runShowWithPasswordForTest(t, opts, []string{"--all-scopes"}, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()

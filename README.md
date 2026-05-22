@@ -374,7 +374,7 @@ kinko explosion
 
 Note:
 - `kinko show` prints grouped sections for the selected scope (`# shared` and `# path=<resolved path>`).
-- `kinko show --all-scopes` enumerates all path scopes in the selected profile and ignores `--path`.
+- `kinko show --all-scopes` requires vault password re-entry before any output, enumerates all path scopes in the selected profile, and ignores `--path`.
 
 ### Export for Shell
 
@@ -573,4 +573,4 @@ kinko password change [--current-stdin --new-stdin|--current-fd <n> --new-fd <n>
 ```
 
 Note:
-- `kinko show --all-scopes` ignores `--path` and prints every path scope in the selected profile.
+- `kinko show --all-scopes` requires vault password re-entry before any output, ignores `--path`, and prints every path scope in the selected profile.

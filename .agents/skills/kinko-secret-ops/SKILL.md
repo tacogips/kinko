@@ -51,6 +51,10 @@ kinko show
 kinko get API_KEY
 ```
 
+Use `kinko show --all-scopes` only when the user needs profile-wide scope
+inspection. It requires vault password re-entry before any output, including
+masked output, because it may display scopes outside the current directory.
+
 5. Runtime injection (recommended):
 ```bash
 kinko exec --env API_KEY,DB_URL -- <command>

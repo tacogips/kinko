@@ -45,6 +45,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
+| `require-password-cross-scope-show.md` | 2026-05-22 | `design-docs/specs/design-show-all-scopes.md#security-and-guardrails` |
 | `kinko-backup.md` | 2026-03-08 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |
 | `password-change-policy-alignment.md` | 2026-03-08 | `design-docs/specs/design-password-change.md` |
 | `kinko-secure-runtime-mvp.md` | 2026-03-02 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |
