@@ -37,7 +37,7 @@ Use the `verify-pr-comment-resolution` agent to handle the verification and reso
 
 ## Agent Delegation
 
-Use the `verify-pr-comment-resolution` agent (`.claude/agents/verify-pr-comment-resolution.md`) to perform the verification and resolution. The agent will:
+Use the `verify-pr-comment-resolution` agent (`.agents/agents/verify-pr-comment-resolution.md`) to perform the verification and resolution. The agent will:
 
 1. Fetch review threads via GraphQL API
 2. Compare source code at `originalCommit` vs. `HEAD`

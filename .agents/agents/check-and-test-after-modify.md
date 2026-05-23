@@ -355,7 +355,7 @@ Output:
 
 ## Context Awareness
 
-- Understand project structure from CLAUDE.md
+- Understand project structure from AGENTS.md
 - Follow Go testing conventions
 - Use appropriate testing strategies per package
 - Respect feature flags if the project uses them

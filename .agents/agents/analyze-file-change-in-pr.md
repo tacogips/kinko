@@ -404,5 +404,5 @@ To enhance understanding, you should reference:
 3. **File diff**: Shows exactly what changed
 4. **Complete file content**: Provides surrounding context
 5. **Related file diffs**: Shows coordinated changes
-6. **Project structure**: Understand architectural patterns (CLAUDE.md)
+6. **Project structure**: Understand architectural patterns (AGENTS.md)
 7. **Code patterns**: Follow error handling conventions

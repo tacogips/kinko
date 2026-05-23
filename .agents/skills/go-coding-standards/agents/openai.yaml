@@ -1,0 +1,3 @@
+interface:
+  display_name: "go-coding-standards"
+  short_description: "Use when writing, reviewing, or refactoring Go code. Provides error handling patterns, project layout, concurrency, and interface design guidelines."

@@ -3,7 +3,7 @@
     "local": {
       "source": {
         "source": "directory",
-        "path": ".claude/marketplace"
+        "path": ".agents/marketplace"
       }
     }
   },
