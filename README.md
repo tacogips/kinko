@@ -351,6 +351,11 @@ kinko delete --shared GITHUB_TOKEN --yes
 kinko delete --shared --all --yes
 ```
 
+Interactive bulk deletes in either repository scope or shared scope list target keys, ask for destructive confirmation, and ask for vault password re-entry only after confirmation.
+If confirmation is declined, `kinko` prints `aborted`, does not ask for the vault password, and keeps vault data unchanged.
+`--yes` skips only the delete confirmation; it does not skip password verification for `delete --all` or `delete --shared --all`, and verification still happens before target keys are loaded or listed.
+If password verification fails, `kinko` leaves stdout empty and keeps vault data unchanged.
+
 ### Set / Get / Show
 
 ```bash
@@ -374,7 +379,8 @@ kinko explosion
 
 Note:
 - `kinko show` prints grouped sections for the selected scope (`# shared` and `# path=<resolved path>`).
-- `kinko show --all-scopes` enumerates all path scopes in the selected profile and ignores `--path`.
+- `kinko show --all-scopes` requires vault password re-entry before any output, enumerates all path scopes in the selected profile, and ignores `--path`.
+- `kinko delete --all` and `kinko delete --shared --all` confirm first in interactive mode, then require vault password re-entry only after confirmation; with `--yes`, password verification is still required before loading, listing, or mutation.
 
 ### Export for Shell
 
@@ -573,4 +579,5 @@ kinko password change [--current-stdin --new-stdin|--current-fd <n> --new-fd <n>
 ```
 
 Note:
-- `kinko show --all-scopes` ignores `--path` and prints every path scope in the selected profile.
+- `kinko show --all-scopes` requires vault password re-entry before any output, ignores `--path`, and prints every path scope in the selected profile.
+- Interactive `kinko delete --all` and `kinko delete --shared --all` ask for destructive confirmation before password re-entry; declined confirmation prints `aborted` without asking for the password, while `--yes` still verifies the password before loading, listing, or mutation.

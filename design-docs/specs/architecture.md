@@ -237,6 +237,39 @@ Import confidentiality constraints:
 - Value display requires explicit opt-in (`--confirm-with-values`).
 - Value-bearing confirmation output on `stderr` must follow sensitive-output guardrails (`--force` required for non-TTY redirection).
 
+### `kinko delete --all`
+
+Bulk delete is a destructive scope-wide mutation and requires direct vault password verification before mutation. Interactive bulk delete asks for destructive confirmation first, then asks for direct vault password verification only after the user confirms. `--yes` skips confirmation, so direct password verification remains the first authorization gate before scope enumeration or mutation.
+
+Interactive authorization order for both current profile/path scope and `--shared` scope when `--yes` is absent:
+1. Parse flags and reject invalid argument combinations without loading vault contents.
+2. Acquire the mutation lock, verify the unlocked session, and load the vault.
+3. Resolve the delete target scope:
+   - current profile/path when `--shared` is not set
+   - vault-wide shared map when `--shared` is set
+4. List target key names on stderr and ask for destructive confirmation.
+5. If the user declines, write the existing aborted stdout, do not ask for the vault password, and do not mutate.
+6. After confirmation, read and verify the current vault password using stderr for prompts and errors.
+   - Verification unwraps the persisted password-wrapped DEK metadata directly.
+   - An already-unlocked session is not sufficient for this authorization step.
+7. Delete the selected scope and atomically persist the vault.
+8. Write the success message to stdout only after persistence succeeds.
+
+Non-interactive authorization order when `--yes` is present:
+1. Parse flags and reject invalid argument combinations without loading vault contents.
+2. Read and verify the current vault password using stderr for prompts and errors.
+3. After successful verification, acquire the mutation lock.
+4. Verify unlocked session, load the vault, resolve the target scope, delete it, and persist.
+5. Write the success message to stdout only after persistence succeeds.
+
+Failure rules:
+- Declined interactive confirmation must not prompt for the vault password, must preserve the existing aborted stdout, and must leave vault data unchanged.
+- Failed or canceled password verification after interactive confirmation must leave stdout empty and vault data unchanged.
+- Failed or canceled password verification with `--yes` stops before vault loading, key listing, or mutation.
+- `--yes` bypasses only the confirmation step; it does not bypass or weaken password verification.
+- Empty-scope errors occur only after the command reaches target-scope resolution.
+- Single-key delete keeps the existing session-gated behavior and is not upgraded to direct password verification by this design.
+
 ### `kinko exec -- cmd`
 
 1. Resolve `profile`, `path`

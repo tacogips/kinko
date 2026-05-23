@@ -227,6 +227,18 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 		return errors.New("delete requires a key or --all")
 	}
 
+	confirmationInput := stdin
+	var passwordInput passwordVerificationInput
+	if deleteAll {
+		passwordInput = passwordVerificationInputFor(stdin, isTerminalReader)
+		confirmationInput = passwordInput.confirmationInput
+		if autoYes {
+			if err := verifyVaultPasswordForBulkDelete(opts, passwordInput, stderr); err != nil {
+				return err
+			}
+		}
+	}
+
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
 		return fmt.Errorf("vault mutation in progress: %w", err)
@@ -268,13 +280,16 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 			if shared {
 				msg = fmt.Sprintf("Delete all %d keys in shared scope? [y/N]: ", len(scope))
 			}
-			ok, err := confirmPrompt(stdin, stderr, msg)
+			ok, err := confirmPrompt(confirmationInput, stderr, msg)
 			if err != nil {
 				return err
 			}
 			if !ok {
 				_, _ = fmt.Fprintln(stdout, "aborted")
 				return nil
+			}
+			if err := verifyVaultPasswordForBulkDelete(opts, passwordInput, stderr); err != nil {
+				return err
 			}
 		}
 		if shared {
@@ -536,14 +551,61 @@ func explosionConfirmationToken(dataDir string) string {
 }
 
 func verifyExplosionPassword(opts globalOptions, reader *bufio.Reader, stderr io.Writer) error {
-	if _, err := fmt.Fprint(stderr, "Re-enter password: "); err != nil {
-		return err
-	}
-	password, err := readSecretFromBuffered(reader)
+	password, err := readSecretWithPromptBuffered(reader, stderr, "Re-enter password: ")
 	if err != nil {
 		return err
 	}
+	return verifyVaultPasswordValue(opts, password)
+}
 
+func verifyVaultPasswordForBulkDelete(opts globalOptions, input passwordVerificationInput, stderr io.Writer) error {
+	return verifyVaultPasswordFromInput(opts, input, stderr, "Re-enter password: ")
+}
+
+type passwordVerificationInput struct {
+	secretInput       io.Reader
+	confirmationInput io.Reader
+	terminalSecret    bool
+}
+
+func passwordVerificationInputFor(stdin io.Reader, isTerminal func(io.Reader) bool) passwordVerificationInput {
+	if isTerminal(stdin) {
+		return passwordVerificationInput{
+			secretInput:       stdin,
+			confirmationInput: stdin,
+			terminalSecret:    true,
+		}
+	}
+	reader := bufio.NewReader(stdin)
+	return passwordVerificationInput{
+		secretInput:       reader,
+		confirmationInput: reader,
+	}
+}
+
+func verifyVaultPasswordForShow(opts globalOptions, stdin io.Reader, stderr io.Writer, prompt string) (io.Reader, error) {
+	input := passwordVerificationInputFor(stdin, isTerminalReader)
+	if err := verifyVaultPasswordFromInput(opts, input, stderr, prompt); err != nil {
+		return nil, err
+	}
+	return input.confirmationInput, nil
+}
+
+func verifyVaultPasswordFromInput(opts globalOptions, input passwordVerificationInput, stderr io.Writer, prompt string) error {
+	var password string
+	var err error
+	if input.terminalSecret {
+		password, err = readSecret(input.secretInput, stderr, prompt)
+	} else {
+		password, err = readSecretWithPromptBuffered(input.secretInput.(*bufio.Reader), stderr, prompt)
+	}
+	if err != nil {
+		return err
+	}
+	return verifyVaultPasswordValue(opts, password)
+}
+
+func verifyVaultPasswordValue(opts globalOptions, password string) error {
 	meta, err := loadMeta(opts.dataDir)
 	if err != nil {
 		return fmt.Errorf("cannot verify password: %w", err)
@@ -672,14 +734,20 @@ func runShow(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 }
 
 func runShowAllScopes(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer, reveal bool) error {
-	shared, pathsByScope, err := showAllSecretScopes(opts)
+	confirmationInput, err := verifyVaultPasswordForShow(opts, stdin, stderr, "Re-enter password: ")
 	if err != nil {
 		return err
 	}
+
 	if reveal {
-		if err := guardSensitiveOutput(opts, stdin, stdout, stderr, "reveal all scopes"); err != nil {
+		if err := guardSensitiveOutput(opts, confirmationInput, stdout, stderr, "reveal all scopes"); err != nil {
 			return err
 		}
+	}
+
+	shared, pathsByScope, err := showAllSecretScopes(opts)
+	if err != nil {
+		return err
 	}
 
 	normalizedPathsByScope, err := normalizePathScopes(pathsByScope)
