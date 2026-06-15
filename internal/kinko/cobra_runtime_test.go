@@ -122,6 +122,21 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("path prune-missing", func(t *testing.T) {
+		opts := setupUnlockedForSet(t)
+		missingPath := filepath.Join(t.TempDir(), "missing")
+		setPathScopeForPruneTest(t, opts, opts.profile, missingPath, "STALE=one")
+		base := []string{"--kinko-dir", opts.dataDir, "--path", filepath.Join(t.TempDir(), "ignored"), "--profile", opts.profile}
+
+		var out bytes.Buffer
+		if err := Run(append(base, "path", "prune-missing"), strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("path prune-missing failed: %v", err)
+		}
+		if !strings.Contains(out.String(), "candidate profile=default path="+missingPath+" keys=1") {
+			t.Fatalf("unexpected path prune-missing output: %q", out.String())
+		}
+	})
+
 	t.Run("set-key explicit empty value", func(t *testing.T) {
 		opts := setupUnlockedForSet(t)
 		base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
@@ -329,6 +344,44 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 			t.Fatalf("unexpected explosion error: %v", err)
 		}
 	})
+}
+
+func TestRun_PathPruneMissingRegisteredThroughCobra(t *testing.T) {
+	withFakeSessionStore(t)
+	opts := setupUnlockedForSet(t)
+	missingPath := filepath.Join(t.TempDir(), "missing")
+	setPathScopeForPruneTest(t, opts, opts.profile, missingPath, "A=one")
+
+	var out bytes.Buffer
+	if err := Run([]string{"--kinko-dir", opts.dataDir, "--profile", opts.profile, "path", "prune-missing", "--json"}, strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"mode":"preview"`) {
+		t.Fatalf("expected JSON preview output through Cobra, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), missingPath) {
+		t.Fatalf("expected stale path through Cobra, got %q", out.String())
+	}
+}
+
+func TestRun_PathPruneMissingRejectsExplicitProfileWithAllProfiles(t *testing.T) {
+	withFakeSessionStore(t)
+	opts := setupUnlockedForSet(t)
+	devMissing := filepath.Join(t.TempDir(), "dev-missing")
+	setPathScopeForPruneTest(t, opts, "dev", devMissing, "DEV=one")
+
+	var out bytes.Buffer
+	args := []string{"--kinko-dir", opts.dataDir, "--profile", "selected", "path", "prune-missing", "--all-profiles"}
+	err := Run(args, strings.NewReader("pw\n"), &out, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected explicit --profile with --all-profiles to fail")
+	}
+	if !strings.Contains(err.Error(), "cannot combine --all-profiles with explicit --profile") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no stdout on argument rejection, got %q", out.String())
+	}
 }
 
 func TestRun_ShowAllScopesRequiresPasswordThroughCobra(t *testing.T) {

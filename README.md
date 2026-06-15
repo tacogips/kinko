@@ -375,12 +375,32 @@ kinko delete API_KEY --yes
 kinko delete --all
 kinko delete --all --yes
 kinko explosion
+kinko path prune-missing
+kinko path prune-missing --all-profiles
+kinko path prune-missing --yes
+kinko path prune-missing --json
 ```
 
 Note:
 - `kinko show` prints grouped sections for the selected scope (`# shared` and `# path=<resolved path>`).
 - `kinko show --all-scopes` requires vault password re-entry before any output, enumerates all path scopes in the selected profile, and ignores `--path`.
 - `kinko delete --all` and `kinko delete --shared --all` confirm first in interactive mode, then require vault password re-entry only after confirmation; with `--yes`, password verification is still required before loading, listing, or mutation.
+
+### Path Scope Maintenance
+
+```bash
+kinko path prune-missing
+kinko path prune-missing --profile dev
+kinko path prune-missing --all-profiles
+kinko path prune-missing --yes
+kinko path prune-missing --json
+```
+
+`kinko path prune-missing` previews stored profile/path scopes whose directories no longer exist. It requires vault password re-entry before any profile, path, key-count, or skipped-path metadata is printed. Preview mode is the default and never mutates vault data.
+
+Use `--yes` to prune the stale path scopes after password verification. The command preserves shared scope data, config payloads, unlock state, backup artifacts, profile definitions, and path scopes outside the selected profile set. `--all-profiles` scans every stored profile and cannot be combined with an explicit `--profile`. The inherited `--path` flag is ignored because the command operates on stored path scopes rather than the current resolved path.
+
+Text and JSON output include only profile names, paths, key counts, skipped diagnostics, and totals. Secret values and key names are never printed.
 
 ### Export for Shell
 
@@ -570,6 +590,7 @@ kinko explosion
 kinko get <key> [--reveal]
 kinko show [--reveal] [--all-scopes]
 kinko profile list
+kinko path prune-missing [--all-profiles] [--yes|-y] [--json]
 kinko config show|set <key> <value>
 kinko export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
 kinko direnv export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
@@ -580,4 +601,5 @@ kinko password change [--current-stdin --new-stdin|--current-fd <n> --new-fd <n>
 
 Note:
 - `kinko show --all-scopes` requires vault password re-entry before any output, ignores `--path`, and prints every path scope in the selected profile.
+- `kinko path prune-missing` previews stale local path scopes by default, requires vault password re-entry before any metadata output, requires `--yes` for deletion, preserves shared scope data, supports `--all-profiles` and `--json`, and ignores `--path`.
 - Interactive `kinko delete --all` and `kinko delete --shared --all` ask for destructive confirmation before password re-entry; declined confirmation prints `aborted` without asking for the password, while `--yes` still verifies the password before loading, listing, or mutation.

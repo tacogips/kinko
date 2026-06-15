@@ -270,6 +270,44 @@ Failure rules:
 - Empty-scope errors occur only after the command reaches target-scope resolution.
 - Single-key delete keeps the existing session-gated behavior and is not upgraded to direct password verification by this design.
 
+### `kinko path prune-missing`
+
+Missing-path pruning is a vault maintenance operation over stored local profile/path scopes.
+It removes encrypted path-scope entries only when the stored directory no longer exists locally, while preserving the vault format and all shared-scope data.
+
+Preview data flow:
+1. Parse command flags and reject invalid combinations before loading vault state.
+2. Read and verify the current vault password before any stored profile/path metadata is written to stdout.
+3. Load and decrypt the vault through the existing password verification path.
+4. Select candidate profiles:
+   - selected `--profile` by default
+   - every stored profile when `--all-profiles` is set
+5. Enumerate stored path scopes for those profiles. Do not enumerate or display shared scope as a candidate.
+6. Normalize each stored path and inspect the filesystem.
+7. Render stale path scopes and skipped diagnostics without printing secret values or key names.
+
+Destructive data flow when `--yes` is set:
+1. Read and verify the current vault password before candidate output or mutation.
+2. Acquire the vault mutation lock.
+3. Reload the mutation-stable vault snapshot.
+4. Recompute prune candidates from the locked snapshot to avoid acting on stale preview state.
+5. Delete only candidate path-scope maps from their owning profile.
+6. Preserve empty profiles unless a separate profile-cleanup design explicitly permits removing them.
+7. Atomically persist the vault in the existing encrypted vault format.
+8. Report pruned profile/path scopes and totals only after persistence succeeds.
+
+Filesystem classification:
+- `stale`: normalized stored path does not exist as a directory.
+- `kept`: normalized stored path exists as a directory.
+- `skipped`: stored path is relative, cannot be normalized safely, collides with another stored path after normalization, points to an existing non-directory file, resolves through an unreadable path, or cannot be classified deterministically.
+
+Failure rules:
+- Failed or canceled password verification must write no stdout and leave vault data unchanged.
+- Preview mode must not acquire destructive intent from prompts or defaults; it is non-mutating even when stale candidates exist.
+- `--yes` is the only destructive confirmation flag for this command and must be present for deletion.
+- Persistence failures must leave the previous encrypted vault state intact via the existing atomic write path.
+- Missing-path pruning must not delete shared scope data, config payloads, unlock state, backup artifacts, profile definitions, or path scopes outside the selected profile set.
+
 ### `kinko exec -- cmd`
 
 1. Resolve `profile`, `path`

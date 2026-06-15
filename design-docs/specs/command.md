@@ -352,6 +352,48 @@ Manage path-scoped mappings and inspect path resolution.
 Subcommands:
 - `kinko path list`
 - `kinko path show --path <dir>`
+- `kinko path prune-missing`
+
+### `kinko path prune-missing`
+
+Preview or prune stored local path scopes whose directories no longer exist.
+This command is a local data maintenance command for repository/path-scoped vault entries only.
+It never deletes vault-wide shared scope data.
+
+Examples:
+
+```bash
+kinko path prune-missing
+kinko path prune-missing --profile dev
+kinko path prune-missing --all-profiles
+kinko path prune-missing --yes
+kinko path prune-missing --json
+```
+
+Scope selection:
+- Default target is the selected profile (`--profile`, default `default`).
+- `--all-profiles` scans path scopes in every stored profile.
+- `--all-profiles` must not be combined with an explicitly supplied inherited `--profile`.
+- Shared scope is out of scope and must not be listed as a prune candidate or deleted.
+- `--path` is ignored for this command because the command operates over stored path scopes instead of the current resolved path.
+
+Safety and authorization:
+- Default mode is preview-only and deletes nothing.
+- Destructive pruning requires explicit `--yes`; no mutation occurs without it.
+- The command requires direct vault password verification before any profile/path-scope output, including preview output, because stored paths and key counts are vault metadata.
+- A previously unlocked session is not sufficient for the cross-scope enumeration or destructive pruning authorization.
+- `--yes` confirms only the prune operation; it does not skip or weaken password verification.
+
+Output:
+- Text preview reports each stale path scope as `profile`, `path`, and key count.
+- Successful destructive output reports the same pruned profile/path scopes and a final total.
+- `--json` emits machine-readable objects with `mode` (`preview` or `prune`), `profile`, `path`, `keyCount`, and aggregate totals.
+- Secret values are never printed. Key names are not required for this command and should be omitted from default output.
+
+Filesystem matching:
+- A stored path scope is stale only when the normalized absolute stored path no longer exists as a directory at scan time.
+- Existing files, broken symlinks, permission-denied paths, relative stored paths, and path normalization collisions are not pruned automatically; they are reported as skipped diagnostics.
+- Symlinks are evaluated by their directory existence result after resolution. A symlink that resolves to an existing directory is not stale.
 
 ### `kinko tui`
 
