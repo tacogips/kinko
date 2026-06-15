@@ -208,7 +208,14 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 			t.Fatalf("backup failed: %v", err)
 		}
 		archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
-		if filepath.Dir(archivePath) != cwd {
+		gotDir, wantDir := filepath.Dir(archivePath), cwd
+		if resolvedGot, err := filepath.EvalSymlinks(gotDir); err == nil {
+			gotDir = resolvedGot
+		}
+		if resolvedWant, err := filepath.EvalSymlinks(wantDir); err == nil {
+			wantDir = resolvedWant
+		}
+		if gotDir != wantDir {
 			t.Fatalf("backup should default to cwd: got %q want dir %q", archivePath, cwd)
 		}
 		if _, err := os.Stat(archivePath); err != nil {
@@ -567,6 +574,70 @@ func TestRun_DeleteSharedAllDeclineSkipsPasswordThroughCobra(t *testing.T) {
 	}
 	if got := valueAtScope(t, opts, "REPO_KEY"); got != "repo" {
 		t.Fatalf("REPO_KEY=%q", got)
+	}
+}
+
+func TestCobraMoveCommands(t *testing.T) {
+	withFakeSessionStore(t)
+
+	opts := setupUnlockedForSet(t)
+	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
+	if err := Run(append(base, "set", "MOVE_LOCAL=local"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("set local failed: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := Run(append(base, "move", "local-to-shared", "MOVE_LOCAL", "--yes"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("local-to-shared failed: %v", err)
+	}
+	if got := valueAtShared(t, opts, "MOVE_LOCAL"); got != "local" {
+		t.Fatalf("shared MOVE_LOCAL=%q", got)
+	}
+
+	out.Reset()
+	if err := Run(append(base, "move", "shared-to-local", "MOVE_LOCAL", "-y"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("shared-to-local failed: %v", err)
+	}
+	if got := valueAtScope(t, opts, "MOVE_LOCAL"); got != "local" {
+		t.Fatalf("local MOVE_LOCAL=%q", got)
+	}
+	vd := loadVaultForMoveTest(t, opts)
+	if _, ok := vd.Shared["MOVE_LOCAL"]; ok {
+		t.Fatal("expected shared source to be deleted")
+	}
+}
+
+func TestCobraMoveHelpIncludesDirections(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"move", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "local-to-shared") || !strings.Contains(got, "shared-to-local") {
+		t.Fatalf("move help missing directions: %q", got)
+	}
+}
+
+func TestCobraMoveRejectsInvalidArgs(t *testing.T) {
+	withFakeSessionStore(t)
+
+	opts := setupUnlockedForSet(t)
+	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "parent positional", args: append(base, "move", "NOPE")},
+		{name: "missing key", args: append(base, "move", "local-to-shared")},
+		{name: "extra key", args: append(base, "move", "shared-to-local", "A", "B")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Run(tc.args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+			if err == nil {
+				t.Fatal("expected invalid args error")
+			}
+		})
 	}
 }
 

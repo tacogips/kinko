@@ -88,6 +88,35 @@ Shared bulk deletion is protected the same way as repository-scoped bulk deletio
 - Failed password verification must leave stdout empty and shared data unchanged.
 - `kinko delete --shared KEY` remains a single-key delete and does not require the extra bulk-delete password verification step.
 
+### Movement Between Local and Shared Scopes
+
+Add explicit directional move commands:
+
+- `kinko move local-to-shared KEY`
+- `kinko move shared-to-local KEY`
+
+These commands are intended for scope maintenance when the user decides that a value currently belongs in the other existing scope.
+They do not introduce a new vault structure and do not alter merge precedence rules.
+
+Movement semantics:
+- A move operates on exactly one key.
+- The source value is copied into the destination scope and then deleted from the source scope in one persisted vault mutation.
+- The command requires an unlocked session and the normal mutation lock.
+- The destination must not already contain the key unless `--overwrite` is specified.
+- If source lookup, destination conflict checking, confirmation, or persistence fails, both scopes remain unchanged.
+- Values are never printed, including in confirmation prompts and error messages.
+
+Direction-specific rules:
+- `local-to-shared` reads from `profiles[profile][path]` and writes to `shared`.
+- `shared-to-local` reads from `shared` and writes to `profiles[profile][path]`.
+- `shared-to-local` may create the selected profile/path map only after source and conflict checks pass.
+- `local-to-shared` must not create an empty local scope when the source key is missing.
+
+Confirmation:
+- Interactive mode asks for confirmation because a successful move deletes the source key.
+- `--yes` / `-y` skips only the confirmation prompt.
+- Direct password re-entry is not added for these single-key moves; they follow the existing single-key `set` and `delete` authorization model.
+
 ## Export Format
 
 `export` outputs scope-separated blocks:
@@ -136,6 +165,11 @@ Required categories:
 - Backward compatibility load for vaults without `shared`.
 - `set`/`set-key` with and without `--shared`.
 - `delete` with `--shared` (single key and `--all`).
+- `move local-to-shared` and `move shared-to-local` success paths.
+- Move source-missing failures with no destination creation.
+- Move destination-conflict failures and `--overwrite` success paths.
+- Move confirmation decline and `--yes` prompt bypass behavior.
+- Move scope isolation: unrelated shared keys, local keys, profiles, and paths remain unchanged.
 - Resolution merge correctness across commands (`get/show/exec/export`).
 - Duplicate key precedence (repo-specific over shared).
 - Export block ordering and comment presence per shell renderer.

@@ -114,6 +114,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 		newSetCommand(ctx, preflight),
 		newSetKeyCommand(ctx, preflight),
 		newDeleteCommand(ctx, preflight),
+		newMoveCommand(ctx, preflight),
 		&cobra.Command{
 			Use:   cmdExplosion,
 			Short: "Irreversibly destroy vault data",
@@ -262,6 +263,48 @@ func newDeleteCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 	cmd.Flags().BoolVar(&shared, "shared", false, "delete from shared scope")
 	cmd.Flags().BoolVar(&deleteAll, "all", false, "delete all keys in selected scope")
 	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "auto confirm deletion")
+	return cmd
+}
+
+func newMoveCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	root := &cobra.Command{
+		Use:   cmdMove,
+		Short: "Move one secret between local and shared scopes",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	root.AddCommand(
+		newMoveDirectionCommand(ctx, preflight, moveLocalToShared, "Move one local profile/path secret into shared scope"),
+		newMoveDirectionCommand(ctx, preflight, moveSharedToLocal, "Move one shared secret into the current local profile/path scope"),
+	)
+	return root
+}
+
+func newMoveDirectionCommand(ctx *runtimeContext, preflight func() error, direction string, short string) *cobra.Command {
+	overwrite := false
+	autoYes := false
+	cmd := &cobra.Command{
+		Use:   direction + " KEY",
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			parseArgs := []string{direction, args[0]}
+			if overwrite {
+				parseArgs = append(parseArgs, "--overwrite")
+			}
+			if autoYes {
+				parseArgs = append(parseArgs, "--yes")
+			}
+			return runMove(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+		},
+	}
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace existing destination key")
+	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "skip move confirmation")
 	return cmd
 }
 

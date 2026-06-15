@@ -10,6 +10,7 @@ const (
 	cmdSet       = "set"
 	cmdSetKey    = "set-key"
 	cmdDelete    = "delete"
+	cmdMove      = "move"
 	cmdExplosion = "explosion"
 	cmdGet       = "get"
 	cmdShow      = "show"
@@ -34,6 +35,11 @@ const (
 
 const (
 	pathPruneMissing = "prune-missing"
+)
+
+const (
+	moveLocalToShared = "local-to-shared"
+	moveSharedToLocal = "shared-to-local"
 )
 
 const (

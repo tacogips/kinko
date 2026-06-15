@@ -356,6 +356,16 @@ If confirmation is declined, `kinko` prints `aborted`, does not ask for the vaul
 `--yes` skips only the delete confirmation; it does not skip password verification for `delete --all` or `delete --shared --all`, and verification still happens before target keys are loaded or listed.
 If password verification fails, `kinko` leaves stdout empty and keeps vault data unchanged.
 
+Move one value between the current local path scope and shared scope when its ownership changes:
+
+```bash
+kinko move local-to-shared GITHUB_TOKEN
+kinko move shared-to-local GITHUB_TOKEN
+kinko move local-to-shared GITHUB_TOKEN --overwrite --yes
+```
+
+Move commands require an unlocked session and the normal vault mutation lock. They copy the existing value to the destination scope, delete the source key, and persist both changes in one encrypted vault save. Destination keys are not replaced unless `--overwrite` is set. `--yes` / `-y` skips only the move confirmation prompt. Prompts and success output name only keys and scopes, never secret values. The encrypted vault format and existing shared/local precedence rules are unchanged.
+
 ### Set / Get / Show
 
 ```bash
@@ -372,6 +382,8 @@ kinko show --all-scopes
 kinko show --all-scopes --reveal
 kinko delete API_KEY
 kinko delete API_KEY --yes
+kinko move local-to-shared API_KEY --yes
+kinko move shared-to-local API_KEY --yes
 kinko delete --all
 kinko delete --all --yes
 kinko explosion
@@ -559,7 +571,7 @@ Important:
 This repository includes reusable assistant skills under `.agents/skills/` for secure `kinko` operations.
 
 - `kinko-secret-ops`
-  - Purpose: standard workflow for init/unlock, set/get/show/delete, shared vs repository scope handling, export/import, and `kinko exec`.
+  - Purpose: standard workflow for init/unlock, set/get/show/delete/move, shared vs repository scope handling, export/import, and `kinko exec`.
   - File: `.agents/skills/kinko-secret-ops/SKILL.md`
 - `refresh-github-token-to-kinko`
   - Purpose: refresh `gh` token scopes and sync the effective token into `kinko` shared secret `GITHUB_TOKEN` with hash-based verification.
@@ -586,6 +598,8 @@ kinko set-key [--shared] <key> --value <value>
 kinko set [--shared] <key>=<value> [<key>=<value> ...]
 kinko delete [--shared] <key> [--yes|-y]
 kinko delete [--shared] --all [--yes|-y]
+kinko move local-to-shared <key> [--overwrite] [--yes|-y]
+kinko move shared-to-local <key> [--overwrite] [--yes|-y]
 kinko explosion
 kinko get <key> [--reveal]
 kinko show [--reveal] [--all-scopes]
@@ -602,4 +616,5 @@ kinko password change [--current-stdin --new-stdin|--current-fd <n> --new-fd <n>
 Note:
 - `kinko show --all-scopes` requires vault password re-entry before any output, ignores `--path`, and prints every path scope in the selected profile.
 - `kinko path prune-missing` previews stale local path scopes by default, requires vault password re-entry before any metadata output, requires `--yes` for deletion, preserves shared scope data, supports `--all-profiles` and `--json`, and ignores `--path`.
+- `kinko move local-to-shared <key>` and `kinko move shared-to-local <key>` move exactly one key, require an unlocked session, preserve the encrypted vault format, and replace destination keys only with `--overwrite`; `--yes` skips only the move confirmation.
 - Interactive `kinko delete --all` and `kinko delete --shared --all` ask for destructive confirmation before password re-entry; declined confirmation prints `aborted` without asking for the password, while `--yes` still verifies the password before loading, listing, or mutation.

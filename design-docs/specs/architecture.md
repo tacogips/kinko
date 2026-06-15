@@ -270,6 +270,33 @@ Failure rules:
 - Empty-scope errors occur only after the command reaches target-scope resolution.
 - Single-key delete keeps the existing session-gated behavior and is not upgraded to direct password verification by this design.
 
+### `kinko move local-to-shared <key>` / `kinko move shared-to-local <key>`
+
+Scope movement is a single-key vault mutation that changes where an existing value is stored without changing the encrypted vault format.
+It reuses the same `shared` map and `profiles[profile][path]` maps that already back `set`, `delete`, `show`, `export`, and `exec`.
+
+Common data flow:
+1. Parse the `move` direction, `key`, `--overwrite`, and `--yes`; reject extra positional keys before loading vault state.
+2. Validate the key with the same environment key rules used by `set`, `set-key`, `get`, and `delete`.
+3. Acquire the vault mutation lock.
+4. Verify the existing unlocked session and load the decrypted vault.
+5. Resolve source and destination maps from the selected direction:
+   - `local-to-shared`: source is `profiles[profile][path]`, destination is `shared`.
+   - `shared-to-local`: source is `shared`, destination is `profiles[profile][path]`.
+6. Check that the source key exists. If not, fail without creating the destination scope or modifying either scope.
+7. Check destination conflict. If the destination already contains the key and `--overwrite` is absent, fail without modifying either scope.
+8. Ask for confirmation unless `--yes` is set. Confirmation names the key and source/destination scopes but never prints the value.
+9. In the in-memory vault snapshot, write the destination value first, then delete the source key.
+10. Atomically persist the encrypted vault once.
+11. Write success output only after persistence succeeds.
+
+Failure rules:
+- A failed source lookup, destination conflict, declined confirmation, canceled prompt, lock conflict, session failure, or persistence failure leaves the previous encrypted vault state intact.
+- `--overwrite` only permits replacing the destination key; it does not weaken source existence checks or confirmation behavior.
+- `--yes` skips only the move confirmation prompt; it does not bypass key validation, session checks, mutation locking, source lookup, or destination conflict handling.
+- No command output, prompt, log line, or error message may include the secret value.
+- Moving a key can change runtime precedence. After `local-to-shared`, another local override may still shadow the shared value in other paths; after `shared-to-local`, other paths no longer receive the moved shared value.
+
 ### `kinko path prune-missing`
 
 Missing-path pruning is a vault maintenance operation over stored local profile/path scopes.
