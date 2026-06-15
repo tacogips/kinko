@@ -167,7 +167,7 @@ func saveVault(dataDir string, dek []byte, data *vaultData) error {
 	if err != nil {
 		return err
 	}
-	return write0600(filepath.Join(dataDir, "vault", "vault.v1.bin"), []byte(blob))
+	return write0600Atomically(filepath.Join(dataDir, "vault", "vault.v1.bin"), []byte(blob))
 }
 
 func loadVault(dataDir string, dek []byte) (*vaultData, error) {
@@ -201,7 +201,7 @@ func saveConfig(dataDir string, dek []byte, cfg map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return write0600(filepath.Join(dataDir, "vault", "config.v1.bin"), []byte(blob))
+	return write0600Atomically(filepath.Join(dataDir, "vault", "config.v1.bin"), []byte(blob))
 }
 
 func loadConfig(dataDir string, dek []byte) (map[string]string, error) {
@@ -448,6 +448,39 @@ func write0600(path string, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+func write0600Atomically(path string, data []byte) error {
+	tmpPath := path + ".tmp"
+	_ = os.Remove(tmpPath)
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	cleanup := func() {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+	}
+	defer cleanup()
+
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func resolveAEADKey(key []byte) ([]byte, error) {

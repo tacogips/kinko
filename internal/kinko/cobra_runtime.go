@@ -14,10 +14,11 @@ import (
 )
 
 type runtimeContext struct {
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
-	opts   globalOptions
+	stdin   io.Reader
+	stdout  io.Writer
+	stderr  io.Writer
+	rawArgs []string
+	opts    globalOptions
 }
 
 var (
@@ -130,6 +131,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 		newImportCommand(ctx, preflight),
 		newExecCommand(ctx, preflight),
 		newProfileCommand(ctx, preflight),
+		newPathCommand(ctx, preflight),
 		newDirenvCommand(ctx, preflight),
 		newPasswordCommand(ctx, preflight),
 	)
@@ -367,6 +369,67 @@ func newProfileCommand(ctx *runtimeContext, preflight func() error) *cobra.Comma
 		},
 	)
 	return root
+}
+
+func newPathCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	root := &cobra.Command{
+		Use:   cmdPath,
+		Short: "Manage stored path scopes",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	root.AddCommand(newPathPruneMissingCommand(ctx, preflight))
+	return root
+}
+
+func newPathPruneMissingCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	allProfiles := false
+	autoYes := false
+	jsonOutput := false
+	cmd := &cobra.Command{
+		Use:   pathPruneMissing,
+		Short: "Preview or prune path scopes whose directories are missing",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			if allProfiles && explicitLongFlag(ctx.rawArgs, "profile") {
+				return fmt.Errorf("%s %s cannot combine --all-profiles with explicit --profile", cmdPath, pathPruneMissing)
+			}
+			parseArgs := []string{}
+			if allProfiles {
+				parseArgs = append(parseArgs, "--all-profiles")
+			}
+			if autoYes {
+				parseArgs = append(parseArgs, "--yes")
+			}
+			if jsonOutput {
+				parseArgs = append(parseArgs, "--json")
+			}
+			return runPathPruneMissing(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+		},
+	}
+	cmd.Flags().BoolVar(&allProfiles, "all-profiles", false, "scan every stored profile")
+	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "prune missing path scopes")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON output")
+	return cmd
+}
+
+func explicitLongFlag(args []string, name string) bool {
+	exact := "--" + name
+	prefix := exact + "="
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == exact || strings.HasPrefix(arg, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func newExportCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {

@@ -27,9 +27,10 @@ type globalOptions struct {
 
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	ctx := &runtimeContext{
-		stdin:  stdin,
-		stdout: stdout,
-		stderr: stderr,
+		stdin:   stdin,
+		stdout:  stdout,
+		stderr:  stderr,
+		rawArgs: append([]string{}, args...),
 	}
 	root, err := newRuntimeRootCommand(ctx)
 	if err != nil {

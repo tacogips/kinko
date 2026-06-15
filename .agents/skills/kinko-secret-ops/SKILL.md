@@ -1,6 +1,6 @@
 ---
 name: kinko-secret-ops
-description: Use when users want to manage encrypted environment variables with the kinko CLI, including init/unlock, shared vs repo scope, set/get/show, export/import, and exec-based runtime injection.
+description: Use when users want to manage encrypted environment variables with the kinko CLI, including init/unlock, shared vs repo scope, set/get/show/delete, stale path-scope pruning, export/import, and exec-based runtime injection.
 allowed-tools: Read, Write, Glob, Grep, Bash
 ---
 
@@ -14,6 +14,7 @@ Apply this skill when users ask to:
 - Initialize or unlock a `kinko` vault
 - Set, get, show, or delete secrets
 - Work with shared and repository-specific scopes
+- Prune stale repository/path-scoped local vault entries
 - Export/import `.env`-style assignments
 - Run commands with secrets via `kinko exec`
 - Diagnose lock/keychain/TTY safety errors
@@ -24,8 +25,9 @@ Apply this skill when users ask to:
 - Prefer `kinko exec` for runtime injection instead of persistent shell export.
 - Treat `--force` as high risk and explain why it is needed before using it.
 - Respect scope precedence: repository scope (`--profile` + `--path`) overrides shared scope.
-- For destructive operations (`delete --all`, `delete --shared --all`, `explosion`), require explicit user intent.
+- For destructive operations (`delete --all`, `delete --shared --all`, `path prune-missing --yes`, `explosion`), require explicit user intent.
 - For interactive bulk deletes, expect destructive confirmation first and direct vault password re-entry only after confirmation; `--yes` skips only the destructive confirmation, so password verification is still required before loading, listing, or mutation.
+- For `path prune-missing`, expect direct vault password re-entry before any path metadata output in both preview and prune modes. Preview is default and non-mutating; `--yes` is required to delete stale local path scopes.
 
 ## Quick Workflow
 
@@ -55,6 +57,10 @@ kinko get API_KEY
 Use `kinko show --all-scopes` only when the user needs profile-wide scope
 inspection. It requires vault password re-entry before any output, including
 masked output, because it may display scopes outside the current directory.
+
+Use `kinko path prune-missing` only when the user wants to inspect or remove
+stored path scopes whose directories no longer exist. It preserves shared scope
+data and ignores inherited `--path` because it operates on stored path scopes.
 
 5. Runtime injection (recommended):
 ```bash
@@ -109,6 +115,24 @@ Bulk delete behavior:
 - With `--yes`, confirmation is skipped and password verification still happens before target keys are loaded, listed, or deleted.
 - Failed password verification leaves stdout empty and keeps vault data unchanged.
 - Single-key deletes such as `kinko delete API_KEY --yes` do not add this extra password verification step.
+
+Preview stale path scopes:
+```bash
+kinko path prune-missing
+kinko path prune-missing --all-profiles
+kinko path prune-missing --json
+```
+
+Prune stale path scopes:
+```bash
+kinko path prune-missing --yes
+```
+
+Path prune behavior:
+- Preview mode reports stale local profile/path scopes and skipped diagnostics without deleting anything.
+- `--yes` prunes only stale local path scopes after direct password verification; it does not delete shared scope data, config, unlock state, backups, profile definitions, or existing path scopes.
+- `--all-profiles` scans every stored profile and must not be combined with an explicit `--profile`.
+- Text and JSON output include profile names, paths, key counts, skipped diagnostics, and totals. Secret values and key names are not printed.
 
 ## Troubleshooting
 

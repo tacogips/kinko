@@ -44,6 +44,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
+| `path-prune-missing.md` | 2026-06-16 | `design-docs/specs/command.md#kinko-path-prune-missing`, `design-docs/specs/architecture.md#kinko-path-prune-missing` |
 | `require-password-cross-scope-show.md` | 2026-05-22 | `design-docs/specs/design-show-all-scopes.md#security-and-guardrails` |
 | `move-delete-all-password-prompt-after-confirmation.md` | 2026-05-23 | `design-docs/specs/architecture.md#kinko-delete---all`, `design-docs/specs/command.md#kinko-delete-key` |
 | `kinko-backup.md` | 2026-03-08 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |

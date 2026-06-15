@@ -18,6 +18,7 @@ const (
 	cmdImport    = "import"
 	cmdExec      = "exec"
 	cmdProfile   = "profile"
+	cmdPath      = "path"
 	cmdPassword  = "password"
 	cmdDirenv    = "direnv"
 )
@@ -29,6 +30,10 @@ const (
 
 const (
 	profileList = "list"
+)
+
+const (
+	pathPruneMissing = "prune-missing"
 )
 
 const (
