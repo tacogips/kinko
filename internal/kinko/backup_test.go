@@ -248,7 +248,14 @@ func TestRunBackup_DefaultsToCurrentWorkingDirectory(t *testing.T) {
 	}
 
 	archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
-	if filepath.Dir(archivePath) != cwd {
+	gotDir, wantDir := filepath.Dir(archivePath), cwd
+	if resolvedGot, err := filepath.EvalSymlinks(gotDir); err == nil {
+		gotDir = resolvedGot
+	}
+	if resolvedWant, err := filepath.EvalSymlinks(wantDir); err == nil {
+		wantDir = resolvedWant
+	}
+	if gotDir != wantDir {
 		t.Fatalf("backup should default to cwd: got %q want dir %q", archivePath, cwd)
 	}
 	if _, err := os.Stat(archivePath); err != nil {

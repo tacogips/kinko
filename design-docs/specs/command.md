@@ -203,6 +203,64 @@ Shared scope:
 - `kinko delete --shared <key>` deletes from shared scope.
 - `kinko delete --shared --all` deletes all shared keys.
 
+### `kinko move local-to-shared <key>`
+
+Move one key from the current local profile/path scope into vault-wide shared scope.
+The operation transfers the existing plaintext value without exposing it in output.
+
+Examples:
+
+```bash
+kinko move local-to-shared GITHUB_TOKEN
+kinko move local-to-shared GITHUB_TOKEN --yes
+kinko move local-to-shared GITHUB_TOKEN --overwrite --yes
+```
+
+Behavior:
+- Source scope is the resolved current `profile` + `path`.
+- Destination scope is vault-wide `shared`.
+- Exactly one key is accepted per invocation.
+- The command requires an unlocked session and the normal vault mutation lock.
+- If the destination shared key already exists, the command fails without changing either scope unless `--overwrite` is set.
+- If the source key does not exist in the current local scope, the command fails without creating or changing shared data.
+- On success, the destination receives the same value and the source local key is deleted in the same persisted vault mutation.
+- Missing or empty local path scopes are not created by this direction.
+- Output must never include the secret value.
+
+Confirmation:
+- Interactive mode asks for confirmation before deleting the source key.
+- `--yes` / `-y` skips only this confirmation prompt.
+- No additional direct password re-entry is required beyond the existing unlocked-session requirement because this is a single-key mutation, matching `set` and single-key `delete` semantics.
+
+### `kinko move shared-to-local <key>`
+
+Move one key from vault-wide shared scope into the current local profile/path scope.
+The operation transfers the existing plaintext value without exposing it in output.
+
+Examples:
+
+```bash
+kinko move shared-to-local GITHUB_TOKEN
+kinko move shared-to-local GITHUB_TOKEN --yes
+kinko move shared-to-local GITHUB_TOKEN --overwrite --yes
+```
+
+Behavior:
+- Source scope is vault-wide `shared`.
+- Destination scope is the resolved current `profile` + `path`.
+- Exactly one key is accepted per invocation.
+- The command requires an unlocked session and the normal vault mutation lock.
+- If the destination local key already exists, the command fails without changing either scope unless `--overwrite` is set.
+- If the source shared key does not exist, the command fails without creating or changing local data.
+- On success, the local destination receives the same value and the shared source key is deleted in the same persisted vault mutation.
+- The local profile/path map is created only after the source key is found and destination conflict checks pass.
+- Output must never include the secret value.
+
+Confirmation:
+- Interactive mode asks for confirmation before deleting the source key.
+- `--yes` / `-y` skips only this confirmation prompt.
+- No additional direct password re-entry is required beyond the existing unlocked-session requirement because this is a single-key mutation, matching `set` and single-key `delete` semantics.
+
 ### `kinko export <shell>`
 
 Resolve profile/path and emit shell-specific export statements.

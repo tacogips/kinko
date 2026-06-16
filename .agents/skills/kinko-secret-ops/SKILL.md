@@ -1,6 +1,6 @@
 ---
 name: kinko-secret-ops
-description: Use when users want to manage encrypted environment variables with the kinko CLI, including init/unlock, shared vs repo scope, set/get/show/delete, stale path-scope pruning, export/import, and exec-based runtime injection.
+description: Use when users want to manage encrypted environment variables with the kinko CLI, including init/unlock, shared vs repo scope, set/get/show/delete/move, stale path-scope pruning, export/import, and exec-based runtime injection.
 allowed-tools: Read, Write, Glob, Grep, Bash
 ---
 
@@ -13,7 +13,7 @@ Operate `kinko` safely for end users.
 Apply this skill when users ask to:
 - Initialize or unlock a `kinko` vault
 - Set, get, show, or delete secrets
-- Work with shared and repository-specific scopes
+- Work with shared and repository-specific scopes, including moving one key between them
 - Prune stale repository/path-scoped local vault entries
 - Export/import `.env`-style assignments
 - Run commands with secrets via `kinko exec`
@@ -27,6 +27,7 @@ Apply this skill when users ask to:
 - Respect scope precedence: repository scope (`--profile` + `--path`) overrides shared scope.
 - For destructive operations (`delete --all`, `delete --shared --all`, `path prune-missing --yes`, `explosion`), require explicit user intent.
 - For interactive bulk deletes, expect destructive confirmation first and direct vault password re-entry only after confirmation; `--yes` skips only the destructive confirmation, so password verification is still required before loading, listing, or mutation.
+- For `move local-to-shared` and `move shared-to-local`, require an unlocked session. The command moves exactly one key, confirms before mutation unless `--yes` is passed, refuses to replace an existing destination key unless `--overwrite` is passed, and must not print secret values.
 - For `path prune-missing`, expect direct vault password re-entry before any path metadata output in both preview and prune modes. Preview is default and non-mutating; `--yes` is required to delete stale local path scopes.
 
 ## Quick Workflow
@@ -46,6 +47,12 @@ kinko unlock --timeout 9h
 ```bash
 kinko set API_KEY=xxx DB_URL=postgres://localhost
 kinko set --shared ORG_TOKEN=yyy
+```
+
+Move one key when its scope ownership changes:
+```bash
+kinko move local-to-shared ORG_TOKEN --yes
+kinko move shared-to-local API_KEY --overwrite --yes
 ```
 
 4. Verify without leaking values:
@@ -74,6 +81,7 @@ kinko exec --all -- <command>
 - Shared scope: `kinko set --shared KEY=VALUE`
 - Repository scope: `kinko --profile <name> --path <dir> set KEY=VALUE`
 - Resolution rule: repository scope wins over shared for duplicate keys.
+- Movement: `kinko move local-to-shared KEY` moves the current profile/path value into shared scope; `kinko move shared-to-local KEY` moves the shared value into the current profile/path scope.
 
 ## Export and Import
 
@@ -108,6 +116,18 @@ Delete all keys in selected scope:
 kinko delete --all --yes
 kinko delete --shared --all --yes
 ```
+
+Move one key between selected local path scope and shared scope:
+```bash
+kinko move local-to-shared API_KEY --yes
+kinko move shared-to-local API_KEY --overwrite --yes
+```
+
+Move behavior:
+- Source keys must exist and destination keys are not replaced unless `--overwrite` is set.
+- Successful moves persist the destination write and source delete together in the existing encrypted vault format.
+- `--yes` skips only the move confirmation; it does not unlock the vault or reveal values.
+- Prompts, success output, and errors name keys and scopes only, never plaintext secret values.
 
 Bulk delete behavior:
 - `kinko delete --all` and `kinko delete --shared --all` list target keys, ask for destructive confirmation, then prompt on stderr for vault password re-entry only after confirmation.
