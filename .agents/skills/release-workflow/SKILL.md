@@ -86,8 +86,10 @@ do
   fi
 done
 
-(cd "${ARTIFACT_DIR}" && sha256sum kinko_${VERSION}_*.tar.gz kinko_${VERSION}_*.zip > SHA256SUMS)
+(cd "${ARTIFACT_DIR}" && find . -maxdepth 1 -type f \( -name 'kinko_*.tar.gz' -o -name 'kinko_*.zip' \) -exec basename {} \; | sort | xargs shasum -a 256 > SHA256SUMS)
 ```
+
+`SHA256SUMS` is directory-wide. If older `kinko_*` archives remain in `dist/release/`, do not overwrite the manifest with latest-version-only entries; include every retained archive so historical and current release artifacts can be verified together.
 
 ### Commit and Push (when user requests push)
 
@@ -143,10 +145,14 @@ After release commands finish:
 1. `./kinko version` matches `internal/build/VERSION`.
 2. `dist/release/kinko_<version>_<os>_<arch>.(tar.gz|zip)` exists for all target platforms.
 3. `dist/release/SHA256SUMS` exists and validates:
-   - `cd dist/release && sha256sum -c SHA256SUMS`
-4. If push was requested, branch and `v<version>` tag are visible on origin.
-5. Working tree has no unintended generated files beyond release artifacts.
-6. If GitHub publish was requested, confirm release URL exists for `v<version>`.
+   - `cd dist/release && shasum -a 256 -c SHA256SUMS`
+4. `dist/release/SHA256SUMS` has one entry for every retained release archive:
+   - `git ls-files dist/release | awk -F/ '/kinko_/ {print $NF}' | sort > /tmp/kinko-release-files.txt`
+   - `awk '{print $2}' dist/release/SHA256SUMS | sort > /tmp/kinko-release-sums.txt`
+   - `diff -u /tmp/kinko-release-files.txt /tmp/kinko-release-sums.txt`
+5. If push was requested, branch and `v<version>` tag are visible on origin.
+6. Working tree has no unintended generated files beyond release artifacts.
+7. If GitHub publish was requested, confirm release URL exists for `v<version>`.
 
 ## Failure Handling
 
@@ -155,6 +161,6 @@ After release commands finish:
 3. If version mismatch appears in `kinko version`, verify `LDFLAGS` wiring in `Taskfile.yml`.
 4. If `gh release create` fails due to existing tag/release, use:
    - `gh release upload <tag> <files...> --clobber`
-5. If checksum validation fails, rebuild artifact and regenerate `SHA256SUMS`.
+5. If checksum validation or archive coverage fails, rebuild artifacts as needed and regenerate `SHA256SUMS` for every retained `dist/release/kinko_*` archive.
 6. If tag already exists, verify target commit and use `gh release upload` without recreating tag.
 7. If `zip` is unavailable, generate Windows `.zip` with a temporary Go helper using `archive/zip`.

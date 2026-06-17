@@ -258,6 +258,16 @@ sequenceDiagram
   - Task build (`Taskfile.yml` ldflags)
   - Runtime command: `kinko version`
 
+## Release Artifacts and Checksums
+
+Release archives are stored under `dist/release/` as `kinko_<version>_<os>_<arch>.tar.gz` or `.zip` files.
+
+`dist/release/SHA256SUMS` is the checksum manifest for the release archive directory. When multiple release versions are retained in `dist/release/`, the manifest must include one entry for every retained `kinko_*` archive instead of only the newest version. Verify the manifest with:
+
+```bash
+cd dist/release && shasum -a 256 -c SHA256SUMS
+```
+
 ## Install
 
 ### Go (from local source)
