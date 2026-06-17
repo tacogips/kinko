@@ -607,6 +607,58 @@ func TestCobraMoveCommands(t *testing.T) {
 	}
 }
 
+func TestCobraCopyCommands(t *testing.T) {
+	withFakeSessionStore(t)
+
+	opts := setupUnlockedForSet(t)
+	sourcePath := filepath.Join(t.TempDir(), "source")
+	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
+	if err := Run(append([]string{"--kinko-dir", opts.dataDir, "--path", sourcePath, "--profile", opts.profile}, "set", "COPY_LOCAL=local"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("set source local failed: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := Run(append(base, "copy", "local-to-local", "COPY_LOCAL", "--from-path", sourcePath), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("local-to-local copy failed: %v", err)
+	}
+	if got := valueAtScope(t, opts, "COPY_LOCAL"); got != "local" {
+		t.Fatalf("local COPY_LOCAL=%q", got)
+	}
+
+	out.Reset()
+	if err := Run(append(base, "copy", "local-to-shared", "COPY_LOCAL"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("local-to-shared copy failed: %v", err)
+	}
+	if got := valueAtShared(t, opts, "COPY_LOCAL"); got != "local" {
+		t.Fatalf("shared COPY_LOCAL=%q", got)
+	}
+
+	destinationPath := filepath.Join(t.TempDir(), "destination")
+	out.Reset()
+	destinationBase := []string{"--kinko-dir", opts.dataDir, "--path", destinationPath, "--profile", opts.profile}
+	if err := Run(append(destinationBase, "copy", "shared-to-local", "COPY_LOCAL"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("shared-to-local copy failed: %v", err)
+	}
+	destinationOpts := opts
+	destinationOpts.path = filepath.Clean(destinationPath)
+	if got := valueAtScope(t, destinationOpts, "COPY_LOCAL"); got != "local" {
+		t.Fatalf("destination COPY_LOCAL=%q", got)
+	}
+}
+
+func TestCobraCopyHelpIncludesDirections(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"copy", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"local-to-local", "local-to-shared", "shared-to-local"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("copy help missing %s: %q", want, got)
+		}
+	}
+}
+
 func TestCobraMoveHelpIncludesDirections(t *testing.T) {
 	var out bytes.Buffer
 	if err := Run([]string{"move", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {

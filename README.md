@@ -366,6 +366,21 @@ kinko move local-to-shared GITHUB_TOKEN --overwrite --yes
 
 Move commands require an unlocked session and the normal vault mutation lock. They copy the existing value to the destination scope, delete the source key, and persist both changes in one encrypted vault save. Destination keys are not replaced unless `--overwrite` is set. `--yes` / `-y` skips only the move confirmation prompt. Prompts and success output name only keys and scopes, never secret values. The encrypted vault format and existing shared/local precedence rules are unchanged.
 
+Copy values between scopes while keeping source keys unchanged:
+
+```bash
+# Copy from another local path scope into the current local path scope
+kinko copy local-to-local --from-path /work/project-a GITHUB_TOKEN
+kinko copy local-to-local --from-path /work/project-a '*' --overwrite
+
+# Copy between the current local path scope and shared scope
+kinko copy local-to-shared GITHUB_TOKEN
+kinko copy shared-to-local GITHUB_TOKEN
+kinko copy shared-to-local '*' --overwrite
+```
+
+Copy commands require an unlocked session and the normal vault mutation lock. A key argument copies one value; `*` copies all values from the source scope. Destination keys are not replaced unless `--overwrite` is set, and a wildcard copy fails without partial writes if any destination key already exists. Copy output names only keys and scopes, never secret values.
+
 ### Set / Get / Show
 
 ```bash
@@ -382,6 +397,10 @@ kinko show --all-scopes
 kinko show --all-scopes --reveal
 kinko delete API_KEY
 kinko delete API_KEY --yes
+kinko copy local-to-local --from-path /other/project API_KEY
+kinko copy local-to-local --from-path /other/project '*'
+kinko copy local-to-shared API_KEY
+kinko copy shared-to-local API_KEY
 kinko move local-to-shared API_KEY --yes
 kinko move shared-to-local API_KEY --yes
 kinko delete --all
@@ -598,6 +617,9 @@ kinko set-key [--shared] <key> --value <value>
 kinko set [--shared] <key>=<value> [<key>=<value> ...]
 kinko delete [--shared] <key> [--yes|-y]
 kinko delete [--shared] --all [--yes|-y]
+kinko copy local-to-local --from-path <dir> <key|*> [--overwrite]
+kinko copy local-to-shared <key|*> [--overwrite]
+kinko copy shared-to-local <key|*> [--overwrite]
 kinko move local-to-shared <key> [--overwrite] [--yes|-y]
 kinko move shared-to-local <key> [--overwrite] [--yes|-y]
 kinko explosion
@@ -616,5 +638,6 @@ kinko password change [--current-stdin --new-stdin|--current-fd <n> --new-fd <n>
 Note:
 - `kinko show --all-scopes` requires vault password re-entry before any output, ignores `--path`, and prints every path scope in the selected profile.
 - `kinko path prune-missing` previews stale local path scopes by default, requires vault password re-entry before any metadata output, requires `--yes` for deletion, preserves shared scope data, supports `--all-profiles` and `--json`, and ignores `--path`.
+- `kinko copy local-to-local --from-path <dir> <key|*>`, `kinko copy local-to-shared <key|*>`, and `kinko copy shared-to-local <key|*>` preserve source keys and replace destination keys only with `--overwrite`; wildcard copies validate all conflicts before writing.
 - `kinko move local-to-shared <key>` and `kinko move shared-to-local <key>` move exactly one key, require an unlocked session, preserve the encrypted vault format, and replace destination keys only with `--overwrite`; `--yes` skips only the move confirmation.
 - Interactive `kinko delete --all` and `kinko delete --shared --all` ask for destructive confirmation before password re-entry; declined confirmation prints `aborted` without asking for the password, while `--yes` still verifies the password before loading, listing, or mutation.

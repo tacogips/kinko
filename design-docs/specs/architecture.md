@@ -297,6 +297,34 @@ Failure rules:
 - No command output, prompt, log line, or error message may include the secret value.
 - Moving a key can change runtime precedence. After `local-to-shared`, another local override may still shadow the shared value in other paths; after `shared-to-local`, other paths no longer receive the moved shared value.
 
+### `kinko copy local-to-local --from-path <dir> <key|*>` / `kinko copy local-to-shared <key|*>` / `kinko copy shared-to-local <key|*>`
+
+Scope copy is a non-destructive vault mutation that writes existing values into another scope without deleting source keys.
+It reuses the same `shared` map and `profiles[profile][path]` maps as `set`, `delete`, `show`, `export`, `exec`, and `move`.
+
+Common data flow:
+1. Parse the `copy` direction, one key or `*`, `--overwrite`, and optional `--from-path`; reject extra positional keys before loading vault state.
+2. Validate a concrete key with the same environment key rules used by `set`, `set-key`, `get`, and `delete`; allow `*` as the all-keys selector.
+3. Normalize `--from-path` for `local-to-local`; reject it for local/shared directions.
+4. Acquire the vault mutation lock.
+5. Verify the existing unlocked session and load the decrypted vault.
+6. Resolve source and destination maps from the selected direction:
+   - `local-to-local`: source is `profiles[profile][fromPath]`, destination is `profiles[profile][path]`.
+   - `local-to-shared`: source is `profiles[profile][path]`, destination is `shared`.
+   - `shared-to-local`: source is `shared`, destination is `profiles[profile][path]`.
+7. Select one source key or all sorted source keys. Missing concrete keys and empty wildcard source scopes fail without mutation.
+8. Check destination conflicts for every selected key. If any selected destination key exists and `--overwrite` is absent, fail without modifying either scope.
+9. Create the destination map only after source and conflict checks pass.
+10. Write all selected destination values into the in-memory vault snapshot without deleting source keys.
+11. Atomically persist the encrypted vault once.
+12. Write success output only after persistence succeeds.
+
+Failure rules:
+- A failed source lookup, empty source, destination conflict, lock conflict, session failure, or persistence failure leaves the previous encrypted vault state intact.
+- `--overwrite` only permits replacing destination keys; it does not weaken source existence checks.
+- Wildcard copies are all-or-nothing with respect to destination conflict checks.
+- No command output, prompt, log line, or error message may include secret values.
+
 ### `kinko path prune-missing`
 
 Missing-path pruning is a vault maintenance operation over stored local profile/path scopes.

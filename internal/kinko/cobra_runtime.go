@@ -114,6 +114,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 		newSetCommand(ctx, preflight),
 		newSetKeyCommand(ctx, preflight),
 		newDeleteCommand(ctx, preflight),
+		newCopyCommand(ctx, preflight),
 		newMoveCommand(ctx, preflight),
 		&cobra.Command{
 			Use:   cmdExplosion,
@@ -280,6 +281,67 @@ func newMoveCommand(ctx *runtimeContext, preflight func() error) *cobra.Command 
 		newMoveDirectionCommand(ctx, preflight, moveSharedToLocal, "Move one shared secret into the current local profile/path scope"),
 	)
 	return root
+}
+
+func newCopyCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	root := &cobra.Command{
+		Use:   cmdCopy,
+		Short: "Copy secrets between local and shared scopes",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	root.AddCommand(
+		newCopyLocalToLocalCommand(ctx, preflight),
+		newCopyDirectionCommand(ctx, preflight, moveLocalToShared, "Copy local profile/path secrets into shared scope"),
+		newCopyDirectionCommand(ctx, preflight, moveSharedToLocal, "Copy shared secrets into the current local profile/path scope"),
+	)
+	return root
+}
+
+func newCopyLocalToLocalCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	fromPath := ""
+	overwrite := false
+	cmd := &cobra.Command{
+		Use:   copyLocalToLocal + " --from-path DIR KEY|*",
+		Short: "Copy secrets from another local path into the current local path",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			parseArgs := []string{copyLocalToLocal, args[0], "--from-path", fromPath}
+			if overwrite {
+				parseArgs = append(parseArgs, "--overwrite")
+			}
+			return runCopy(ctx.opts, parseArgs, ctx.stdout)
+		},
+	}
+	cmd.Flags().StringVar(&fromPath, "from-path", "", "source local path scope")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace existing destination keys")
+	return cmd
+}
+
+func newCopyDirectionCommand(ctx *runtimeContext, preflight func() error, direction string, short string) *cobra.Command {
+	overwrite := false
+	cmd := &cobra.Command{
+		Use:   direction + " KEY|*",
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			parseArgs := []string{direction, args[0]}
+			if overwrite {
+				parseArgs = append(parseArgs, "--overwrite")
+			}
+			return runCopy(ctx.opts, parseArgs, ctx.stdout)
+		},
+	}
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace existing destination keys")
+	return cmd
 }
 
 func newMoveDirectionCommand(ctx *runtimeContext, preflight func() error, direction string, short string) *cobra.Command {
