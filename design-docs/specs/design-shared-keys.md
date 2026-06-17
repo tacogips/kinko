@@ -117,6 +117,29 @@ Confirmation:
 - `--yes` / `-y` skips only the confirmation prompt.
 - Direct password re-entry is not added for these single-key moves; they follow the existing single-key `set` and `delete` authorization model.
 
+### Copy Between Local and Shared Scopes
+
+Add copy-only commands for values that should remain in the source scope:
+
+- `kinko copy local-to-local --from-path DIR KEY|*`
+- `kinko copy local-to-shared KEY|*`
+- `kinko copy shared-to-local KEY|*`
+
+Copy semantics:
+- A copy operates on exactly one key or `*` for every key in the source scope.
+- The source value is written into the destination scope without deleting the source key.
+- The command requires an unlocked session and the normal mutation lock.
+- Destination keys must not already exist unless `--overwrite` is specified.
+- Wildcard copies validate every selected destination key before mutation, so conflict failures do not partially copy non-conflicting keys.
+- If source lookup, empty wildcard selection, destination conflict checking, or persistence fails, both scopes remain unchanged.
+- Values are never printed, including in success output and error messages.
+
+Direction-specific rules:
+- `local-to-local` reads from `profiles[profile][fromPath]` and writes to `profiles[profile][path]`.
+- `local-to-shared` reads from `profiles[profile][path]` and writes to `shared`.
+- `shared-to-local` reads from `shared` and writes to `profiles[profile][path]`.
+- Destination profile/path maps are created only after source and conflict checks pass.
+
 ## Export Format
 
 `export` outputs scope-separated blocks:

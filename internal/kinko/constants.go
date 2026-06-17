@@ -10,6 +10,7 @@ const (
 	cmdSet       = "set"
 	cmdSetKey    = "set-key"
 	cmdDelete    = "delete"
+	cmdCopy      = "copy"
 	cmdMove      = "move"
 	cmdExplosion = "explosion"
 	cmdGet       = "get"
@@ -38,6 +39,7 @@ const (
 )
 
 const (
+	copyLocalToLocal  = "local-to-local"
 	moveLocalToShared = "local-to-shared"
 	moveSharedToLocal = "shared-to-local"
 )

@@ -203,6 +203,75 @@ Shared scope:
 - `kinko delete --shared <key>` deletes from shared scope.
 - `kinko delete --shared --all` deletes all shared keys.
 
+### `kinko copy local-to-local --from-path <dir> <key|*>`
+
+Copy one key or every key from another local path scope in the selected profile into the current local profile/path scope.
+The operation preserves source values and does not expose plaintext values in output.
+
+Examples:
+
+```bash
+kinko copy local-to-local --from-path /work/project-a GITHUB_TOKEN
+kinko copy local-to-local --from-path /work/project-a '*'
+kinko copy local-to-local --from-path /work/project-a '*' --overwrite
+```
+
+Behavior:
+- Source scope is the selected `profile` plus the normalized `--from-path` directory.
+- Destination scope is the resolved current `profile` plus `path`.
+- The key argument must be exactly one environment key or `*`.
+- `*` selects all keys currently present in the source scope.
+- The command requires an unlocked session and the normal vault mutation lock.
+- If any selected destination local key already exists, the command fails without changing either scope unless `--overwrite` is set.
+- Wildcard copy checks all selected keys before writing, so conflict failures do not partially copy non-conflicting keys.
+- If the source key does not exist, or wildcard source scope is empty, the command fails without creating or changing destination data.
+- Source keys are never deleted.
+- Output must never include secret values.
+
+### `kinko copy local-to-shared <key|*>`
+
+Copy one key or every key from the current local profile/path scope into vault-wide shared scope while preserving the local source.
+
+Examples:
+
+```bash
+kinko copy local-to-shared GITHUB_TOKEN
+kinko copy local-to-shared '*'
+kinko copy local-to-shared '*' --overwrite
+```
+
+Behavior:
+- Source scope is the resolved current `profile` plus `path`.
+- Destination scope is vault-wide `shared`.
+- The key argument must be exactly one environment key or `*`.
+- The command requires an unlocked session and the normal vault mutation lock.
+- Destination shared keys are not replaced unless `--overwrite` is set.
+- Wildcard copy fails without partial writes if any selected destination key already exists and `--overwrite` is absent.
+- Source keys are never deleted.
+- Output must never include secret values.
+
+### `kinko copy shared-to-local <key|*>`
+
+Copy one key or every key from vault-wide shared scope into the current local profile/path scope while preserving the shared source.
+
+Examples:
+
+```bash
+kinko copy shared-to-local GITHUB_TOKEN
+kinko copy shared-to-local '*'
+kinko copy shared-to-local '*' --overwrite
+```
+
+Behavior:
+- Source scope is vault-wide `shared`.
+- Destination scope is the resolved current `profile` plus `path`.
+- The key argument must be exactly one environment key or `*`.
+- The command requires an unlocked session and the normal vault mutation lock.
+- Destination local keys are not replaced unless `--overwrite` is set.
+- Wildcard copy fails without partial writes if any selected destination key already exists and `--overwrite` is absent.
+- Source keys are never deleted.
+- Output must never include secret values.
+
 ### `kinko move local-to-shared <key>`
 
 Move one key from the current local profile/path scope into vault-wide shared scope.
