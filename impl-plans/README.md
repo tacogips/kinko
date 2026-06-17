@@ -44,6 +44,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
+| `release-diff-remediation.md` | 2026-06-17 | `design-docs/specs/notes.md#release-diff-remediation-notes` |
 | `copy-values-between-scopes.md` | 2026-06-16 | `design-docs/specs/command.md#kinko-copy-local-to-local---from-path-dir-key`, `design-docs/specs/command.md#kinko-copy-local-to-shared-key`, `design-docs/specs/command.md#kinko-copy-shared-to-local-key` |
 | `move-values-between-scopes.md` | 2026-06-16 | `design-docs/specs/command.md#kinko-move-local-to-shared-key`, `design-docs/specs/command.md#kinko-move-shared-to-local-key`, `design-docs/specs/architecture.md#kinko-move-local-to-shared-key--kinko-move-shared-to-local-key`, `design-docs/specs/design-shared-keys.md#movement-between-local-and-shared-scopes` |
 | `path-prune-missing.md` | 2026-06-16 | `design-docs/specs/command.md#kinko-path-prune-missing`, `design-docs/specs/architecture.md#kinko-path-prune-missing` |
@@ -67,8 +68,8 @@ Only plans from eligible phases should be read to minimize context loading.
 | Phase | Status | Depends On |
 |-------|--------|------------|
 | 1 | COMPLETED | - |
-| 2 | NOT_STARTED | Phase 1 |
-| 3 | BLOCKED | Phase 2 |
+| 2 | COMPLETED | Phase 1 |
+| 3 | COMPLETED | Phase 2 |
 
 ### Phase to Plans Mapping
 

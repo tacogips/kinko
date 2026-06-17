@@ -92,6 +92,34 @@ Guardrails:
 - `show/get` are masked by default and need `--reveal`.
 - Primary config is encrypted; TUI and CLI can edit config via decrypt/re-encrypt flow.
 
+## Release-Diff Remediation Notes
+
+Context:
+- Review range: `v0.1.2..HEAD` on latest `origin/main`.
+- Parent review handoff: `codex-recent-change-quality-loop:riel-codex-recent-change-quality-loop-1781657586-b51d8611:step3-handoff`.
+- Blocking findings are limited to `internal/kinko/runtime.go` maintainability and `dist/release/SHA256SUMS` release artifact consistency.
+
+Runtime file organization decision:
+- `internal/kinko/runtime.go` must be split along cohesive package-internal runtime boundaries when it reaches or exceeds the Go source file size limit in `.agents/skills/go-coding-standards/SKILL.md`.
+- The split must preserve the public package surface, CLI behavior, command output, prompt order, error behavior, and tests.
+- Preferred boundaries are command/runtime concerns already present in the package, such as import parsing, export rendering, delete/show behavior, set helpers, backup helpers, and shared scope helpers.
+- New files remain in package `kinko`; this is an internal organization change, not an architecture or API change.
+- Adapter-specific behavior is not introduced by this remediation.
+
+Release artifact manifest decision:
+- `dist/release/SHA256SUMS` is the verification source for tracked files in `dist/release/`.
+- The release directory must use one consistent policy per commit:
+  - if multiple release versions are tracked, every tracked archive must have a checksum entry; or
+  - if only the latest release is represented by the manifest, older tracked archives must be removed in the same change.
+- For the current post-`v0.1.2` review, the preferred remediation is to include checksum entries for every tracked `dist/release/kinko_*` archive so the historical baseline artifacts and newer artifacts can be verified together.
+- Verification must include `cd dist/release && shasum -a 256 -c SHA256SUMS` and an explicit tracked-file coverage check comparing `git ls-files dist/release` against `SHA256SUMS`.
+
+Rollout constraints:
+- Keep fixes scoped to this isolated review worktree.
+- Do not touch unrelated local worktrees named in workflow input.
+- Preserve current CLI behavior and public package surface.
+- Run `gofmt` on moved Go code and verify with `go test ./...`, `go vet ./...`, and review-range diff checks.
+
 ## Use Cases
 
 ### Use Case 1: direnv-managed development shell
