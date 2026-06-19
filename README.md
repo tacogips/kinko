@@ -270,6 +270,16 @@ cd dist/release && shasum -a 256 -c SHA256SUMS
 
 ## Install
 
+### Homebrew
+
+```bash
+brew tap tacogips/tap
+brew install kinko
+kinko version
+```
+
+The Homebrew formula is maintained in `tacogips/homebrew-tap` and installs the latest published GitHub Release artifact for the current platform.
+
 ### Go (from local source)
 
 ```bash

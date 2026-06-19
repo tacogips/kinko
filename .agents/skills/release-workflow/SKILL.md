@@ -25,6 +25,7 @@ In this repository, interpret an unscoped "release" request as:
 3. Commit release artifacts if requested by the user
 4. Push branch and tags to GitHub
 5. Publish GitHub Release only if the user explicitly asks for remote publishing
+6. Update the Homebrew tap formula after a GitHub Release is published
 
 If the user explicitly asks for "binary only", perform steps 1-2 only.
 
@@ -39,6 +40,9 @@ If the user explicitly asks for "binary only", perform steps 1-2 only.
 6. Ensure remote is configured and writable:
    - `git remote -v`
    - `git push --dry-run origin <branch>`
+7. Ensure the Homebrew tap checkout is available when updating the formula:
+   - default path: `../homebrew-tap`
+   - formula path: `Formula/kinko.rb`
 
 ## Standard Commands
 
@@ -139,6 +143,49 @@ gh release create "${TAG}" \
 
 If release exists, use `gh release upload` with `--clobber`.
 
+### Homebrew Formula Update (after GitHub Release publish)
+
+The Homebrew formula lives in `tacogips/homebrew-tap` as `Formula/kinko.rb`.
+Update it only after the GitHub Release assets exist and their SHA256 values are known.
+
+Expected formula artifact mapping:
+
+| Homebrew platform | Release asset |
+|-------------------|---------------|
+| macOS Apple Silicon | `kinko_${VERSION}_darwin_arm64.tar.gz` |
+| macOS Intel | `kinko_${VERSION}_darwin_amd64.tar.gz` |
+| Linux ARM64 | `kinko_${VERSION}_linux_arm64.tar.gz` |
+| Linux x86_64 | `kinko_${VERSION}_linux_amd64.tar.gz` |
+
+Use the GitHub Release asset digests or `shasum -a 256` on downloaded assets to update the formula:
+
+```bash
+VERSION="$(cat internal/build/VERSION)"
+TAP_DIR="${TAP_DIR:-../homebrew-tap}"
+
+gh release view "v${VERSION}" \
+  --repo tacogips/kinko \
+  --json assets \
+  --jq '.assets[] | select(.name | test("kinko_.*_(darwin|linux)_(amd64|arm64)\\.tar\\.gz$")) | [.name, .digest] | @tsv'
+
+# Edit "${TAP_DIR}/Formula/kinko.rb":
+# - version "${VERSION}"
+# - URL paths under https://github.com/tacogips/kinko/releases/download/v${VERSION}/
+# - sha256 values without the "sha256:" prefix
+```
+
+Then verify the formula from the tap checkout:
+
+```bash
+brew update
+brew audit --strict --online kinko || brew audit --strict kinko
+brew install kinko
+kinko version
+brew test kinko
+```
+
+If `brew audit --online` fails due network or GitHub rate limits, run the non-online audit and record the limitation. Homebrew rejects arbitrary formula paths that are not in a registered tap, so verify through the `tacogips/tap/kinko` formula name after the tap update is committed and pushed.
+
 ## Verification Checklist
 
 After release commands finish:
@@ -153,6 +200,7 @@ After release commands finish:
 5. If push was requested, branch and `v<version>` tag are visible on origin.
 6. Working tree has no unintended generated files beyond release artifacts.
 7. If GitHub publish was requested, confirm release URL exists for `v<version>`.
+8. If GitHub publish was requested, `tacogips/homebrew-tap` has `Formula/kinko.rb` updated to the same version and `brew test kinko` passes locally.
 
 ## Failure Handling
 
@@ -164,3 +212,4 @@ After release commands finish:
 5. If checksum validation or archive coverage fails, rebuild artifacts as needed and regenerate `SHA256SUMS` for every retained `dist/release/kinko_*` archive.
 6. If tag already exists, verify target commit and use `gh release upload` without recreating tag.
 7. If `zip` is unavailable, generate Windows `.zip` with a temporary Go helper using `archive/zip`.
+8. If Homebrew cannot install the formula, inspect the archive layout with `tar -tzf`; current archives contain one platform-named binary, and the formula should install it as `kinko`.
