@@ -25,7 +25,7 @@ In this repository, interpret an unscoped "release" request as:
 3. Commit release artifacts if requested by the user
 4. Push branch and tags to GitHub
 5. Publish GitHub Release only if the user explicitly asks for remote publishing
-6. Update the Homebrew tap formula after a GitHub Release is published
+6. Update, commit, push, and verify the Homebrew tap formula after a GitHub Release is published
 
 If the user explicitly asks for "binary only", perform steps 1-2 only.
 
@@ -146,7 +146,7 @@ If release exists, use `gh release upload` with `--clobber`.
 ### Homebrew Formula Update (after GitHub Release publish)
 
 The Homebrew formula lives in `tacogips/homebrew-tap` as `Formula/kinko.rb`.
-Update it only after the GitHub Release assets exist and their SHA256 values are known.
+Update it only after the GitHub Release assets exist and their SHA256 values are known. Homebrew installs the latest published GitHub Release, not unreleased `main`; do not point the formula at a tag until `gh release view v<VERSION>` succeeds.
 
 Expected formula artifact mapping:
 
@@ -177,11 +177,27 @@ gh release view "v${VERSION}" \
 Then verify the formula from the tap checkout:
 
 ```bash
+cd "${TAP_DIR}"
+ruby -c Formula/kinko.rb
 brew update
 brew audit --strict --online kinko || brew audit --strict kinko
 brew install kinko
 kinko version
 brew test kinko
+```
+
+Commit and push the tap update after local verification:
+
+```bash
+cd "${TAP_DIR}"
+git add Formula/kinko.rb README.md
+git diff --staged --stat
+git commit -m "chore: release kinko ${VERSION}"
+git push origin main
+brew update
+brew reinstall tacogips/tap/kinko
+kinko version
+brew test tacogips/tap/kinko
 ```
 
 If `brew audit --online` fails due network or GitHub rate limits, run the non-online audit and record the limitation. Homebrew rejects arbitrary formula paths that are not in a registered tap, so verify through the `tacogips/tap/kinko` formula name after the tap update is committed and pushed.
@@ -200,7 +216,7 @@ After release commands finish:
 5. If push was requested, branch and `v<version>` tag are visible on origin.
 6. Working tree has no unintended generated files beyond release artifacts.
 7. If GitHub publish was requested, confirm release URL exists for `v<version>`.
-8. If GitHub publish was requested, `tacogips/homebrew-tap` has `Formula/kinko.rb` updated to the same version and `brew test kinko` passes locally.
+8. If GitHub publish was requested, `tacogips/homebrew-tap` has `Formula/kinko.rb` updated to the same version, committed, pushed to `main`, and install-tested through `tacogips/tap/kinko`.
 
 ## Failure Handling
 
