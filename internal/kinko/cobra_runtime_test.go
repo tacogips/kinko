@@ -353,6 +353,65 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 	})
 }
 
+func TestRun_CobraUnlockAlreadyUnlockedWithoutTimeoutDoesNotPrompt(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
+
+	if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "init"}, strings.NewReader("pw123456\npw123456\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "unlock", "--timeout", "5m"}, strings.NewReader("pw123456\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("initial unlock failed: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "unlock"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("already-unlocked plain unlock should not prompt: %v", err)
+	}
+	if !strings.Contains(out.String(), "unlocked") {
+		t.Fatalf("unexpected unlock output: %q", out.String())
+	}
+}
+
+func TestRun_CobraUnlockAlreadyUnlockedWithTimeoutRefreshesAfterPassword(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
+
+	if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "init"}, strings.NewReader("pw123456\npw123456\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "unlock", "--timeout", "1m"}, strings.NewReader("pw123456\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("initial unlock failed: %v", err)
+	}
+	locked, initialExpiresAt, err := sessionStatus(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked {
+		t.Fatal("expected initial unlocked session")
+	}
+
+	var out bytes.Buffer
+	if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "unlock", "--timeout", "2h"}, strings.NewReader("pw123456\n"), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("unlock refresh failed: %v", err)
+	}
+	locked, refreshedExpiresAt, err := sessionStatus(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked {
+		t.Fatal("expected refreshed unlocked session")
+	}
+	if !refreshedExpiresAt.After(initialExpiresAt.Add(time.Hour)) {
+		t.Fatalf("expected refreshed expiry after initial expiry, initial=%s refreshed=%s", initialExpiresAt, refreshedExpiresAt)
+	}
+	if !strings.Contains(out.String(), "unlocked") {
+		t.Fatalf("unexpected unlock output: %q", out.String())
+	}
+}
+
 func TestRun_PathPruneMissingRegisteredThroughCobra(t *testing.T) {
 	withFakeSessionStore(t)
 	opts := setupUnlockedForSet(t)

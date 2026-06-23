@@ -544,6 +544,79 @@ func TestRunUnlock_ShowsAutoLockTimeWhenAlreadyUnlocked(t *testing.T) {
 	}
 }
 
+func TestRunUnlock_WithTimeoutWhenAlreadyUnlockedRefreshesAfterPassword(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	if err := unlockSession(dataDir, time.Minute, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	locked, initialExpiresAt, err := sessionStatus(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked {
+		t.Fatal("expected initial unlocked session")
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := runUnlock(globalOptions{dataDir: dataDir}, []string{"--timeout", "2h"}, strings.NewReader("pw\n"), &out, &errBuf); err != nil {
+		t.Fatalf("expected unlock refresh to succeed: %v", err)
+	}
+
+	locked, refreshedExpiresAt, err := sessionStatus(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked {
+		t.Fatal("expected refreshed unlocked session")
+	}
+	if !refreshedExpiresAt.After(initialExpiresAt.Add(time.Hour)) {
+		t.Fatalf("expected refreshed expiry after initial expiry, initial=%s refreshed=%s", initialExpiresAt, refreshedExpiresAt)
+	}
+	want := "unlocked (auto-lock at " + formatAutoLockTimeLocal(refreshedExpiresAt) + ")\n"
+	if out.String() != want {
+		t.Fatalf("unexpected unlock output: got=%q want=%q", out.String(), want)
+	}
+}
+
+func TestRunUnlock_WithTimeoutWhenAlreadyUnlockedRelocksBeforeCredentialFailure(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	if err := unlockSession(dataDir, 5*time.Minute, "pw"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	err := runUnlock(globalOptions{dataDir: dataDir}, []string{"--timeout", "2h"}, strings.NewReader("wrong\nwrong\nwrong\n"), &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected credential failure")
+	}
+	if !strings.Contains(err.Error(), "credential mismatch") {
+		t.Fatalf("expected credential mismatch, got: %v", err)
+	}
+	locked, _, statusErr := sessionStatus(dataDir)
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if !locked {
+		t.Fatal("expected session to be locked after relock and failed unlock")
+	}
+}
+
 func TestRunUnlock_ShowsAutoLockTimeAfterSuccessfulUnlock(t *testing.T) {
 	withFakeSessionStore(t)
 	dataDir := t.TempDir()
