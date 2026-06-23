@@ -100,13 +100,25 @@ func runUnlock(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	timeoutProvided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "timeout" {
+			timeoutProvided = true
+		}
+	})
 	locked, expiresAt, err := sessionStatus(opts.dataDir)
 	if err != nil {
 		return err
 	}
 	if !locked {
-		_, _ = fmt.Fprintf(stdout, "unlocked (auto-lock at %s)\n", formatAutoLockTimeLocal(expiresAt))
-		return nil
+		if timeoutProvided {
+			if err := lockSessionWithWarning(opts.dataDir, stderr); err != nil {
+				return fmt.Errorf("lock existing session before unlock refresh: %w", err)
+			}
+		} else {
+			_, _ = fmt.Fprintf(stdout, "unlocked (auto-lock at %s)\n", formatAutoLockTimeLocal(expiresAt))
+			return nil
+		}
 	}
 	preflightMode := opts.keychainPreflight
 	if preflightMode == "" {

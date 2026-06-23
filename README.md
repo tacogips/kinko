@@ -335,6 +335,10 @@ kinko status
 kinko lock
 ```
 
+When kinko is already unlocked, running `kinko unlock --timeout <duration>`
+refreshes the auto-lock time by relocking and prompting for the password again,
+matching `kinko lock` followed by `kinko unlock --timeout <duration>`.
+
 ### Shared Secrets Across All Project Directories
 
 Use `--shared` for values you want to reuse everywhere, such as `GITHUB_TOKEN`.

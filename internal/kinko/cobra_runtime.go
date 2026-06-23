@@ -180,11 +180,15 @@ func newUnlockCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 	cmd := &cobra.Command{
 		Use:   cmdUnlock,
 		Short: "Unlock vault session",
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := preflight(); err != nil {
 				return err
 			}
-			return runUnlock(ctx.opts, []string{"--timeout", timeout}, ctx.stdin, ctx.stdout, ctx.stderr)
+			parseArgs := []string{}
+			if cmd.Flags().Changed("timeout") {
+				parseArgs = append(parseArgs, "--timeout", timeout)
+			}
+			return runUnlock(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().StringVar(&timeout, "timeout", "9h", "unlock timeout")
