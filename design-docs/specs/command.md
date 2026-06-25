@@ -97,6 +97,136 @@ Exit codes:
 
 Show lock state, active timeout, data dir, and current path/profile resolution.
 
+### `kinko folder`
+
+Manage project-scoped encrypted folder vaults.
+
+Parent behavior:
+- `kinko folder` is a help-only command and accepts no positional arguments.
+- Folder commands resolve `--profile` and `--path` the same way as secret
+  commands.
+- Folder commands require initialized kinko metadata and an unlocked kinko
+  session because folder registrations are stored in encrypted config.
+
+#### `kinko folder add <name>`
+
+Register `<name>` as an encrypted folder vault under the current resolved path.
+
+Examples:
+
+```bash
+kinko folder add private
+kinko --profile dev --path . folder add agent-work
+```
+
+Behavior:
+- `<name>` must be one relative path element.
+- `<name>` must not be empty, `.`, `..`, start with `-`, contain control
+  characters, or contain path separators.
+- The plaintext mountpoint is `<resolved-path>/<name>`.
+- The command fails if the mountpoint already exists as a non-directory.
+- The command creates encrypted folder metadata in the encrypted config payload.
+- The command creates backend storage under the kinko data directory.
+- The command adds `<name>/` to `.gitignore` in the resolved path when absent.
+- Commented `.gitignore` rules and negated rules do not count as active
+  protection for the folder mountpoint.
+- A symlinked `.gitignore` is rejected instead of followed.
+- If encrypted registration persistence fails after `.gitignore` is updated,
+  the previous `.gitignore` state is restored.
+- The command does not mount the folder.
+
+Output:
+
+```text
+folder added: private
+```
+
+#### `kinko folder unlock <name>`
+
+Mount the encrypted folder so the plaintext directory appears in the project.
+
+Examples:
+
+```bash
+kinko folder unlock private
+```
+
+Behavior:
+- Requires an unlocked kinko session.
+- Derives the backend secret from kinko key material and folder identity.
+- Creates the mountpoint directory immediately before mounting when needed.
+- Uses the OS default backend: `hdiutil` on macOS. Linux is intentionally
+  unavailable for the current release and returns an unsupported-platform
+  backend error.
+- Fails if the folder has not been registered.
+- Fails rather than mounting over unrelated content.
+- Refuses to take ownership of an already-mounted folder.
+- Waits in the foreground after mounting and soft-unmounts when the command
+  exits, including interrupt or terminate.
+- A later `kinko lock` while this command is running does not force-unmount the
+  folder; the running folder command remains responsible for cleanup.
+
+Output:
+
+```text
+folder unlocked: private
+path: ./private
+holding folder unlock; send interrupt or terminate to lock: private
+```
+
+After soft unmount, stdout includes a final lock message.
+
+#### `kinko folder lock <name>`
+
+Soft-unmount the plaintext folder.
+
+Examples:
+
+```bash
+kinko folder lock private
+```
+
+Behavior:
+- Performs normal detach/unmount only.
+- Requires an unlocked kinko session to read encrypted folder registration
+  metadata. If `kinko lock` was already run while a foreground `folder unlock`
+  owner is active, exit or interrupt that owner process to trigger cleanup.
+- Does not force detach busy filesystems.
+- If the backend reports busy, the command fails with guidance and leaves the
+  mount intact so the user can close files and retry `kinko folder lock <name>`.
+- Does not infer ownership of an existing mountpoint directory. Directory
+  cleanup is performed by the foreground `folder unlock` owner only when that
+  command created the mountpoint for its own mount lifecycle.
+
+#### `kinko folder status [name]`
+
+Show configured folder vaults and mount state.
+
+Examples:
+
+```bash
+kinko folder status
+kinko folder status private
+```
+
+Default text output lists names and states. JSON output can be added in a later
+phase once the status schema is stable.
+
+#### `kinko folder path <name>`
+
+Print the plaintext mountpoint path for a currently mounted folder.
+
+Examples:
+
+```bash
+kinko folder path private
+```
+
+Behavior:
+- Succeeds only when the folder is registered and mounted.
+- Prints the resolved mountpoint path.
+- Does not unlock or mount by itself.
+
 ### `kinko backup <directory>`
 
 Create a password-locked ZIP archive in the specified destination directory.

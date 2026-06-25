@@ -782,6 +782,20 @@ func TestRun_CobraHelpDoesNotExposeImplicitCompletion(t *testing.T) {
 	}
 }
 
+func TestRun_CobraFolderUnlockHelpHidesCompatibilityHoldFlag(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"folder", "unlock", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "--hold") {
+		t.Fatalf("folder unlock help should not expose compatibility --hold flag: %q", got)
+	}
+	if !strings.Contains(got, "Usage:") || !strings.Contains(got, "unlock NAME") {
+		t.Fatalf("unexpected folder unlock help output: %q", got)
+	}
+}
+
 func TestRun_CobraRejectsImplicitCompletionCommand(t *testing.T) {
 	err := Run([]string{"completion"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil {

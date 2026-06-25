@@ -1,0 +1,13 @@
+{
+  "id": "review",
+  "description": "Review the folder vault design evidence.",
+  "nodeType": "command",
+  "variables": {},
+  "command": {
+    "scriptPath": "scripts/review.sh",
+    "workingDirectory": "../../.."
+  },
+  "output": {
+    "description": "JSON review findings for the folder vault design."
+  }
+}

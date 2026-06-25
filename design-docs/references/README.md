@@ -14,6 +14,11 @@ This directory contains reference materials for system design and implementation
 | HashiCorp Vault Concepts | https://developer.hashicorp.com/vault/docs/concepts | Secret lifecycle and threat-model design ideas |
 | Bitwarden Security Whitepaper | https://bitwarden.com/help/bitwarden-security-white-paper/ | Client-side encryption and key handling reference |
 | 1Password Security Design | https://support.1password.com/1password-security/ | Security architecture reference for local+sync vault models |
+| gocryptfs | https://nuetzlich.net/gocryptfs/ | Linux encrypted overlay filesystem backend candidate |
+| hdiutil manual | https://keith.github.io/xcode-man-pages/hdiutil.1.html | macOS disk image creation, attach, and detach backend reference |
+| Apple Disk Utility disk images | https://support.apple.com/guide/disk-utility/create-a-disk-image-dskutl11888/mac | macOS encrypted disk image user-facing behavior reference |
+| Cryptomator | https://cryptomator.org/ | Comparable encrypted folder vault product |
+| VeraCrypt | https://veracrypt.io/ | Comparable encrypted volume/container product |
 
 ## Reference Documents
 
