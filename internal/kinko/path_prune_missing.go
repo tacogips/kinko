@@ -60,18 +60,6 @@ const (
 
 type osPathExistenceClassifier struct{}
 
-func runPath(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return errors.New("path requires subcommand: prune-missing")
-	}
-	switch args[0] {
-	case pathPruneMissing:
-		return runPathPruneMissing(opts, args[1:], stdin, stdout, stderr)
-	default:
-		return fmt.Errorf("unknown path subcommand %q", args[0])
-	}
-}
-
 func runPathPruneMissing(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	pruneOpts, err := parsePathPruneMissingArgs(args)
 	if err != nil {

@@ -244,19 +244,19 @@ func TestRunShow_AllScopes_MaskedAndSortedByPathAndKey(t *testing.T) {
 	if !strings.HasPrefix(got, "# profile=default\n\n# shared\n") {
 		t.Fatalf("missing profile/shared headers: %q", got)
 	}
-	if strings.Index(got, "A_SHARED=sh****-a") == -1 {
+	if !strings.Contains(got, "A_SHARED=sh****-a") {
 		t.Fatalf("expected masked A_SHARED in output: %q", got)
 	}
-	if strings.Index(got, "Z_SHARED=sh****-z") == -1 {
+	if !strings.Contains(got, "Z_SHARED=sh****-z") {
 		t.Fatalf("expected masked Z_SHARED in output: %q", got)
 	}
-	if strings.Index(got, "# path="+pathAValue) == -1 || strings.Index(got, "# path="+pathBValue) == -1 {
+	if !strings.Contains(got, "# path="+pathAValue) || !strings.Contains(got, "# path="+pathBValue) {
 		t.Fatalf("missing path headers: %q", got)
 	}
 	if strings.Index(got, "# path="+pathAValue) > strings.Index(got, "# path="+pathBValue) {
 		t.Fatalf("paths not sorted: %q", got)
 	}
-	if strings.Index(got, "A=****") == -1 || strings.Index(got, "B=****") == -1 {
+	if !strings.Contains(got, "A=****") || !strings.Contains(got, "B=****") {
 		t.Fatalf("expected masked path values: %q", got)
 	}
 	if strings.Index(got, "A=****") > strings.Index(got, "B=****") {

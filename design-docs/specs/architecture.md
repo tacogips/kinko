@@ -190,7 +190,7 @@ unlocked.
 Initial goals:
 - `kinko folder add <name>` registers `<current-path>/<name>` as an encrypted
   folder vault and adds the plaintext folder path to `.gitignore`.
-- `kinko folder unlock <name>` creates or opens the encrypted backing store,
+- `kinko folder unlock <name>` opens the existing encrypted backing store,
   mounts it at `<current-path>/<name>`, keeps kinko in the foreground as the
   mount owner, and soft-unmounts the folder when the command exits.
 - `kinko folder lock <name>` performs a normal, non-force detach/unmount.

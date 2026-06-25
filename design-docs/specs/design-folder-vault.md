@@ -39,8 +39,9 @@ Behavior:
 - all folder subcommands require an unlocked kinko session to read encrypted
   folder registration metadata.
 - `unlock` requires an unlocked kinko session, derives or retrieves the backend
-  credential, creates the mountpoint if needed, and mounts the plaintext folder
-  at `<resolved-path>/<name>`.
+  credential, requires the registered backend storage to exist, creates the
+  mountpoint if needed, and mounts the plaintext folder at
+  `<resolved-path>/<name>`.
 - `unlock` keeps kinko in the foreground as the mount owner and soft-unmounts
   when the command exits, including interrupt or terminate.
 - `kinko lock` after a successful `folder unlock` blocks future mount attempts

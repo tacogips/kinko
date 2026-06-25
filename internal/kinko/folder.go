@@ -90,6 +90,9 @@ func runFolderAdd(opts globalOptions, args []string, stdout io.Writer) error {
 	}
 	secret := deriveFolderSecret(dek, record)
 	backend := newFolderBackend(opts.dataDir)
+	if err := ensureFolderStorageDirectory(opts.dataDir, record); err != nil {
+		return err
+	}
 	if err := backend.Ensure(context.Background(), record, secret); err != nil {
 		return err
 	}
@@ -132,8 +135,19 @@ func runFolderUnlock(opts globalOptions, args []string, stdout io.Writer) error 
 	if err != nil {
 		return err
 	}
-	backend := newFolderBackend(opts.dataDir)
 	mountpoint := folderMountpoint(record)
+	storageExists, err := folderStorageExists(opts.dataDir, record)
+	if err != nil {
+		return err
+	}
+	if !storageExists {
+		dir, err := checkedFolderStorageDir(opts.dataDir, record)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("folder storage path does not exist: %s", dir)
+	}
+	backend := newFolderBackend(opts.dataDir)
 	status, err := backend.Status(context.Background(), record, mountpoint)
 	if err != nil {
 		return err
@@ -146,10 +160,6 @@ func runFolderUnlock(opts globalOptions, args []string, stdout io.Writer) error 
 		return err
 	}
 	secret := deriveFolderSecret(dek, record)
-	if err := backend.Ensure(context.Background(), record, secret); err != nil {
-		cleanupCreatedMountpoint(mountpoint, created)
-		return err
-	}
 	if err := backend.Mount(context.Background(), record, secret, mountpoint); err != nil {
 		cleanupCreatedMountpoint(mountpoint, created)
 		return err
@@ -345,13 +355,26 @@ func validateFolderMountpointForAdd(mountpoint string) error {
 }
 
 func folderStorageExists(dataDir string, record FolderRecord) (bool, error) {
+	if err := validateFolderStorageID(record.FolderID); err != nil {
+		return false, err
+	}
+	rootExists, err := folderStorageRootExists(dataDir)
+	if err != nil {
+		return false, err
+	}
+	if !rootExists {
+		return false, nil
+	}
 	dir := folderStorageDir(dataDir, record)
-	info, err := os.Stat(dir)
+	info, err := os.Lstat(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, fmt.Errorf("stat folder storage: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("folder storage path must not be a symlink: %s", dir)
 	}
 	if !info.IsDir() {
 		return false, fmt.Errorf("folder storage path exists and is not a directory: %s", dir)
@@ -359,8 +382,88 @@ func folderStorageExists(dataDir string, record FolderRecord) (bool, error) {
 	return true, nil
 }
 
+func folderStorageRootExists(dataDir string) (bool, error) {
+	root := folderStorageRoot(dataDir)
+	info, err := os.Lstat(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat folder storage root: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("folder storage root must not be a symlink: %s", root)
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("folder storage root exists and is not a directory: %s", root)
+	}
+	return true, nil
+}
+
+func ensureFolderStorageRoot(dataDir string) error {
+	root := folderStorageRoot(dataDir)
+	info, err := os.Lstat(root)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat folder storage root: %w", err)
+		}
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			return fmt.Errorf("create folder storage root: %w", err)
+		}
+		info, err = os.Lstat(root)
+		if err != nil {
+			return fmt.Errorf("stat folder storage root after create: %w", err)
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("folder storage root must not be a symlink: %s", root)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("folder storage root exists and is not a directory: %s", root)
+	}
+	return nil
+}
+
+func ensureFolderStorageDirectory(dataDir string, record FolderRecord) error {
+	if err := validateFolderStorageID(record.FolderID); err != nil {
+		return err
+	}
+	if err := ensureFolderStorageRoot(dataDir); err != nil {
+		return err
+	}
+	dir := folderStorageDir(dataDir, record)
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat folder storage: %w", err)
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			return fmt.Errorf("create folder storage: %w", err)
+		}
+		return nil
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("folder storage path must not be a symlink: %s", dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("folder storage path exists and is not a directory: %s", dir)
+	}
+	return nil
+}
+
 func cleanupFolderStorage(dataDir string, record FolderRecord) {
-	_ = os.RemoveAll(folderStorageDir(dataDir, record))
+	if ok, err := folderStorageRootExists(dataDir); err != nil || !ok {
+		return
+	}
+	dir, err := checkedFolderStorageDir(dataDir, record)
+	if err != nil {
+		return
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return
+	}
+	_ = os.RemoveAll(dir)
 }
 
 func prepareFolderMountpoint(mountpoint string) (bool, error) {

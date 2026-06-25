@@ -141,18 +141,6 @@ func prepareMoveSecret(vd *vaultData, opts globalOptions, moveOpts moveSecretOpt
 	}, value, nil
 }
 
-func moveSecretBetweenScopes(vd *vaultData, opts globalOptions, moveOpts moveSecretOptions) (moveSecretResult, error) {
-	result, value, err := prepareMoveSecret(vd, opts, moveOpts)
-	if err != nil {
-		return moveSecretResult{}, err
-	}
-	destinationScope := ensureMoveDestinationScope(vd, opts, moveOpts.Direction)
-	destinationScope[moveOpts.Key] = value
-	sourceScope := moveSourceScope(vd, opts, moveOpts.Direction)
-	delete(sourceScope, moveOpts.Key)
-	return result, nil
-}
-
 func moveSourceScope(vd *vaultData, opts globalOptions, direction moveDirection) map[string]string {
 	switch direction {
 	case moveDirectionLocalToShared:

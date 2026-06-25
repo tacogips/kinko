@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,11 +21,19 @@ func newDefaultFolderBackend(dataDir string) FolderBackend {
 }
 
 func (b hdiutilFolderBackend) Ensure(ctx context.Context, record FolderRecord, secret string) error {
-	imagePath := b.imagePath(record)
-	if _, err := os.Stat(imagePath); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
+	if err := ensureFolderStorageDirectory(b.dataDir, record); err != nil {
 		return err
+	}
+	imagePath, err := b.imagePath(record)
+	if err != nil {
+		return err
+	}
+	exists, err := hdiutilImagePathExists(imagePath)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(imagePath), 0o700); err != nil {
 		return err
@@ -43,9 +52,31 @@ func (b hdiutilFolderBackend) Ensure(ctx context.Context, record FolderRecord, s
 }
 
 func (b hdiutilFolderBackend) Mount(ctx context.Context, record FolderRecord, secret string, mountpoint string) error {
+	storageExists, err := folderStorageExists(b.dataDir, record)
+	if err != nil {
+		return err
+	}
+	if !storageExists {
+		dir, err := checkedFolderStorageDir(b.dataDir, record)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("folder storage path does not exist: %s", dir)
+	}
+	imagePath, err := b.imagePath(record)
+	if err != nil {
+		return err
+	}
+	exists, err := hdiutilImagePathExists(imagePath)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("folder image path does not exist: %s", imagePath)
+	}
 	args := []string{
 		"attach",
-		b.imagePath(record),
+		imagePath,
 		"-stdinpass",
 		"-mountpoint", mountpoint,
 		"-nobrowse",
@@ -68,8 +99,29 @@ func (b hdiutilFolderBackend) Status(ctx context.Context, _ FolderRecord, mountp
 	return FolderMountStatus{Mounted: false, Detail: "not mounted"}, nil
 }
 
-func (b hdiutilFolderBackend) imagePath(record FolderRecord) string {
-	return filepath.Join(folderStorageDir(b.dataDir, record), "macos.sparsebundle")
+func (b hdiutilFolderBackend) imagePath(record FolderRecord) (string, error) {
+	dir, err := checkedFolderStorageDir(b.dataDir, record)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "macos.sparsebundle"), nil
+}
+
+func hdiutilImagePathExists(imagePath string) (bool, error) {
+	info, err := os.Lstat(imagePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat folder image path: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("folder image path must not be a symlink: %s", imagePath)
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("folder image path exists and is not a directory: %s", imagePath)
+	}
+	return true, nil
 }
 
 func parseHdiutilInfoMounted(info []byte, mountpoint string) bool {

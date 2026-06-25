@@ -15,19 +15,23 @@ import (
 )
 
 type fakeFolderBackend struct {
-	mu         sync.Mutex
-	mounted    map[string]bool
-	ensures    int
-	mounts     int
-	locks      int
-	dataDir    string
-	unmountErr error
+	mu                  sync.Mutex
+	mounted             map[string]bool
+	ensures             int
+	mounts              int
+	locks               int
+	statuses            int
+	dataDir             string
+	ensureSawStorageDir bool
+	unmountErr          error
 }
 
-func (f *fakeFolderBackend) Ensure(context.Context, FolderRecord, string) error {
+func (f *fakeFolderBackend) Ensure(_ context.Context, record FolderRecord, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensures++
+	info, err := os.Lstat(folderStorageDir(f.dataDir, record))
+	f.ensureSawStorageDir = err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
 	return nil
 }
 
@@ -53,6 +57,7 @@ func (f *fakeFolderBackend) Unmount(_ context.Context, _ FolderRecord, mountpoin
 func (f *fakeFolderBackend) Status(_ context.Context, _ FolderRecord, mountpoint string) (FolderMountStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.statuses++
 	return FolderMountStatus{Mounted: f.mounted[mountpoint]}, nil
 }
 
@@ -66,6 +71,12 @@ func (f *fakeFolderBackend) counts() (ensures, mounts, locks int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.ensures, f.mounts, f.locks
+}
+
+func (f *fakeFolderBackend) statusCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.statuses
 }
 
 func withFakeFolderBackend(t *testing.T) *fakeFolderBackend {
@@ -151,6 +162,9 @@ func TestFolderAddRegistersEncryptedConfigAndGitignore(t *testing.T) {
 	}
 	if fake.ensures != 1 {
 		t.Fatalf("Ensure calls=%d want 1", fake.ensures)
+	}
+	if !fake.ensureSawStorageDir {
+		t.Fatal("backend Ensure should receive a pre-created non-symlink storage directory")
 	}
 	if fake.mounts != 0 {
 		t.Fatalf("folder add must not mount, Mount calls=%d", fake.mounts)
@@ -362,6 +376,110 @@ func TestFolderAddPreservesPreexistingStorageWhenRegistrationFails(t *testing.T)
 	}
 }
 
+func TestFolderAddRejectsSymlinkedStorageDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior differs on windows")
+	}
+	fake := withFakeFolderBackend(t)
+	opts := setupUnlockedFolderTest(t)
+	record := FolderRecord{FolderID: deriveFolderID(opts.profile, opts.path, "private")}
+	storageDir := folderStorageDir(opts.dataDir, record)
+	outsideDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(storageDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideDir, storageDir); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runFolder(opts, []string{folderAdd, "private"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "folder storage path must not be a symlink") {
+		t.Fatalf("expected symlinked folder storage error, got %v", err)
+	}
+	if fake.ensures != 0 {
+		t.Fatalf("backend Ensure should not run for symlinked storage, calls=%d", fake.ensures)
+	}
+	if _, err := os.Lstat(storageDir); err != nil {
+		t.Fatalf("symlinked storage directory should not be removed: %v", err)
+	}
+}
+
+func TestFolderAddRejectsSymlinkedStorageRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior differs on windows")
+	}
+	fake := withFakeFolderBackend(t)
+	opts := setupUnlockedFolderTest(t)
+	foldersRoot := filepath.Join(opts.dataDir, "folders")
+	if err := os.Symlink(t.TempDir(), foldersRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runFolder(opts, []string{folderAdd, "private"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "folder storage root must not be a symlink") {
+		t.Fatalf("expected symlinked folder storage root error, got %v", err)
+	}
+	if fake.ensures != 0 {
+		t.Fatalf("backend Ensure should not run for symlinked storage root, calls=%d", fake.ensures)
+	}
+}
+
+func TestCleanupFolderStorageDoesNotFollowSymlinkedStorageRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior differs on windows")
+	}
+	dataDir := t.TempDir()
+	record := FolderRecord{FolderID: "folder-id"}
+	outsideRoot := t.TempDir()
+	outsideStorageDir := filepath.Join(outsideRoot, record.FolderID)
+	if err := os.MkdirAll(outsideStorageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(outsideStorageDir, "marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideRoot, filepath.Join(dataDir, "folders")); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupFolderStorage(dataDir, record)
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("cleanup should not remove storage through symlinked root: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dataDir, "folders")); err != nil {
+		t.Fatalf("cleanup should leave symlinked storage root untouched: %v", err)
+	}
+}
+
+func TestFolderStorageMetadataRejectsSymlinkedStorageDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior differs on windows")
+	}
+	opts := setupUnlockedFolderTest(t)
+	record, err := newFolderRecord(opts.profile, opts.path, "private", folderBackendName(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	storageDir := folderStorageDir(opts.dataDir, record)
+	if err := os.MkdirAll(filepath.Dir(storageDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := os.Symlink(target, storageDir); err != nil {
+		t.Fatal(err)
+	}
+
+	err = ensureFolderStorageMetadata(opts.dataDir, record)
+	if err == nil || !strings.Contains(err.Error(), "folder storage path must not be a symlink") {
+		t.Fatalf("expected symlinked folder storage error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "meta.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("metadata should not be written through symlink target, stat error=%v", err)
+	}
+}
+
 func TestFolderAddRejectsSymlinkedGitignoreWithoutWritingTarget(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink behavior differs on windows")
@@ -552,6 +670,31 @@ func TestFolderUnlockSoftUnmountsOnOwnerExitByDefault(t *testing.T) {
 	}
 }
 
+func TestFolderUnlockDoesNotEnsureBackendStorage(t *testing.T) {
+	fake := withFakeFolderBackend(t)
+	opts := setupUnlockedFolderTest(t)
+	if err := runFolder(opts, []string{folderAdd, "private"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("folder add failed: %v", err)
+	}
+	ensuresBefore, _, _ := fake.counts()
+
+	withFolderOwnerExit(t, func() {})
+	if err := runFolder(opts, []string{folderUnlock, "private"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("folder unlock failed: %v", err)
+	}
+
+	ensuresAfter, mounts, locks := fake.counts()
+	if ensuresAfter != ensuresBefore {
+		t.Fatalf("folder unlock must not recreate backend storage with Ensure: before=%d after=%d", ensuresBefore, ensuresAfter)
+	}
+	if mounts != 1 {
+		t.Fatalf("Mount calls=%d want 1", mounts)
+	}
+	if locks != 1 {
+		t.Fatalf("Unmount calls=%d want 1", locks)
+	}
+}
+
 func TestFolderUnlockPreservesPreexistingEmptyMountpoint(t *testing.T) {
 	withFakeFolderBackend(t)
 	opts := setupUnlockedFolderTest(t)
@@ -642,6 +785,43 @@ func TestFolderUnlockHoldAcceptedAsCompatibilityNoOp(t *testing.T) {
 	}
 	if locks != 1 {
 		t.Fatalf("Unmount calls=%d want 1", locks)
+	}
+}
+
+func TestFolderUnlockRejectsSymlinkedStorageBeforeBackendAccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior differs on windows")
+	}
+	fake := withFakeFolderBackend(t)
+	opts := setupUnlockedFolderTest(t)
+	if err := runFolder(opts, []string{folderAdd, "private"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("folder add failed: %v", err)
+	}
+	record := FolderRecord{FolderID: deriveFolderID(opts.profile, opts.path, "private")}
+	storageDir := folderStorageDir(opts.dataDir, record)
+	if err := os.RemoveAll(storageDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), storageDir); err != nil {
+		t.Fatal(err)
+	}
+	ensuresBefore, _, _ := fake.counts()
+	statusesBefore := fake.statusCalls()
+
+	withFolderOwnerExit(t, func() {})
+	err := runFolder(opts, []string{folderUnlock, "private"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "folder storage path must not be a symlink") {
+		t.Fatalf("expected symlinked folder storage error, got %v", err)
+	}
+	ensuresAfter, mounts, _ := fake.counts()
+	if ensuresAfter != ensuresBefore {
+		t.Fatalf("backend Ensure calls changed after symlinked storage error: before=%d after=%d", ensuresBefore, ensuresAfter)
+	}
+	if statusesAfter := fake.statusCalls(); statusesAfter != statusesBefore {
+		t.Fatalf("backend Status calls changed after symlinked storage error: before=%d after=%d", statusesBefore, statusesAfter)
+	}
+	if mounts != 0 {
+		t.Fatalf("Mount calls=%d want 0", mounts)
 	}
 }
 

@@ -154,6 +154,8 @@ kinko folder unlock private
 Behavior:
 - Requires an unlocked kinko session.
 - Derives the backend secret from kinko key material and folder identity.
+- Fails if the registered backend storage is missing instead of creating a new
+  empty vault.
 - Creates the mountpoint directory immediately before mounting when needed.
 - Uses the OS default backend: `hdiutil` on macOS. Linux is intentionally
   unavailable for the current release and returns an unsupported-platform

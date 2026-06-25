@@ -2,7 +2,6 @@ package kinko
 
 import (
 	"errors"
-	"fmt"
 )
 
 const (
@@ -45,11 +44,4 @@ func ExitCode(err error) int {
 		return ce.code
 	}
 	return 1
-}
-
-func formatInternalError(prefix string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", prefix, err)
 }

@@ -135,6 +135,9 @@ func folderMountpoint(record FolderRecord) string {
 }
 
 func ensureFolderStorageMetadata(dataDir string, record FolderRecord) error {
+	if err := ensureFolderStorageDirectory(dataDir, record); err != nil {
+		return err
+	}
 	metadata := folderStorageMetadata{
 		FormatVersion: 1,
 		Backend:       record.Backend,
@@ -147,11 +150,28 @@ func ensureFolderStorageMetadata(dataDir string, record FolderRecord) error {
 		return fmt.Errorf("encode folder storage metadata: %w", err)
 	}
 	b = append(b, '\n')
-	dir := folderStorageDir(dataDir, record)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create folder storage metadata directory: %w", err)
+	dir, err := checkedFolderStorageDir(dataDir, record)
+	if err != nil {
+		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "meta.json"), b, 0o600); err != nil {
+	return writeFolderStorageMetadata(filepath.Join(dir, "meta.json"), b)
+}
+
+func writeFolderStorageMetadata(path string, b []byte) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat folder storage metadata: %w", err)
+		}
+	} else {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("folder storage metadata must not be a symlink: %s", path)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("folder storage metadata path exists and is not a regular file: %s", path)
+		}
+	}
+	if err := write0600Atomically(path, b); err != nil {
 		return fmt.Errorf("write folder storage metadata: %w", err)
 	}
 	return nil

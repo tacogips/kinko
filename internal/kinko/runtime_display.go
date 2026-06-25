@@ -293,22 +293,6 @@ func guardSensitiveOutput(opts globalOptions, stdin io.Reader, stdout, stderr io
 	return nil
 }
 
-func guardSensitiveStderr(opts globalOptions, stdin io.Reader, stderr io.Writer, action string) error {
-	if !isTerminalWriter(stderr) && !opts.force {
-		return errors.New("sensitive output blocked for non-tty/redirection (use --force)")
-	}
-	if isTerminalWriter(stderr) && opts.confirm {
-		ok, err := confirmPrompt(stdin, stderr, "Confirm "+action+"? [y/N]: ")
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return errors.New("aborted")
-		}
-	}
-	return nil
-}
-
 func isTerminalWriter(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {

@@ -23,12 +23,34 @@ type FolderMountStatus struct {
 	Detail  string
 }
 
-var errFolderUnsupportedPlatform = errors.New("folder vault backend is unsupported on this platform")
-
 var newFolderBackend = newDefaultFolderBackend
 
 func folderStorageDir(dataDir string, record FolderRecord) string {
-	return filepath.Join(dataDir, "folders", record.FolderID)
+	return filepath.Join(folderStorageRoot(dataDir), record.FolderID)
+}
+
+func checkedFolderStorageDir(dataDir string, record FolderRecord) (string, error) {
+	if err := validateFolderStorageID(record.FolderID); err != nil {
+		return "", err
+	}
+	return folderStorageDir(dataDir, record), nil
+}
+
+func validateFolderStorageID(folderID string) error {
+	if folderID == "" {
+		return errors.New("folder storage id must not be empty")
+	}
+	if filepath.IsAbs(folderID) || folderID == "." || folderID == ".." || filepath.Clean(folderID) != folderID {
+		return fmt.Errorf("folder storage id must be one relative path element: %q", folderID)
+	}
+	if strings.ContainsAny(folderID, `/\`) {
+		return fmt.Errorf("folder storage id must not contain path separators: %q", folderID)
+	}
+	return nil
+}
+
+func folderStorageRoot(dataDir string) string {
+	return filepath.Join(dataDir, "folders")
 }
 
 func folderBackendName() string {
@@ -38,24 +60,6 @@ func folderBackendName() string {
 	default:
 		return runtime.GOOS
 	}
-}
-
-type unsupportedFolderBackend struct{}
-
-func (unsupportedFolderBackend) Ensure(context.Context, FolderRecord, string) error {
-	return errFolderUnsupportedPlatform
-}
-
-func (unsupportedFolderBackend) Mount(context.Context, FolderRecord, string, string) error {
-	return errFolderUnsupportedPlatform
-}
-
-func (unsupportedFolderBackend) Unmount(context.Context, FolderRecord, string) error {
-	return errFolderUnsupportedPlatform
-}
-
-func (unsupportedFolderBackend) Status(context.Context, FolderRecord, string) (FolderMountStatus, error) {
-	return FolderMountStatus{}, errFolderUnsupportedPlatform
 }
 
 func folderBackendEnv() []string {
