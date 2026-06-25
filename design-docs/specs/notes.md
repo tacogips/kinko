@@ -122,6 +122,35 @@ Rollout constraints:
 
 ## Use Cases
 
+## Folder Vault Research Notes
+
+Comparable tools:
+- `gocryptfs`: closest Linux backend fit because it separates a cipher
+  directory from a plaintext FUSE mountpoint and supports command-line
+  operation.
+- macOS encrypted sparsebundle/disk images via `hdiutil`: best macOS default
+  because it uses built-in OS disk image support and avoids macFUSE as an
+  initial dependency.
+- Cryptomator and VeraCrypt: similar vault/container UX, but heavier as kinko
+  embedded CLI backends.
+- sandbox tools such as macOS sandboxing or containers: relevant for future
+  process visibility boundaries, but separate from encrypted-at-rest folder
+  storage.
+
+Design implication:
+- kinko should not implement a custom encrypted filesystem.
+- The initial feature should wrap stable OS/tool backends behind a small Go
+  interface and keep lifecycle behavior conservative.
+- Automatic unmount is feasible without a daemon when `kinko folder unlock`
+  owns a foreground mount process, but TTL, crash cleanup, sleep/wake handling,
+  and retrying busy mounts would require a separate watcher/LaunchAgent design.
+
+Security wording:
+- "Unlocked only in this terminal" is an ergonomic lifecycle goal, not a strict
+  OS access-control guarantee for ordinary mounts.
+- Stronger isolation requires a future sandboxed `kinko run` mode that limits
+  which paths a child process can read.
+
 ### Use Case 1: direnv-managed development shell
 
 Scenario:

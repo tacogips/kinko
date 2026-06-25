@@ -19,6 +19,7 @@ const (
 	cmdExport    = "export"
 	cmdImport    = "import"
 	cmdExec      = "exec"
+	cmdFolder    = "folder"
 	cmdProfile   = "profile"
 	cmdPath      = "path"
 	cmdPassword  = "password"
@@ -36,6 +37,14 @@ const (
 
 const (
 	pathPruneMissing = "prune-missing"
+)
+
+const (
+	folderAdd    = "add"
+	folderUnlock = "unlock"
+	folderLock   = "lock"
+	folderStatus = "status"
+	folderPath   = "path"
 )
 
 const (

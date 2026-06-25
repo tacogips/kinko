@@ -132,6 +132,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 		newExportCommand(ctx, preflight),
 		newImportCommand(ctx, preflight),
 		newExecCommand(ctx, preflight),
+		newFolderCommand(ctx, preflight),
 		newProfileCommand(ctx, preflight),
 		newPathCommand(ctx, preflight),
 		newDirenvCommand(ctx, preflight),
@@ -478,6 +479,79 @@ func newProfileCommand(ctx *runtimeContext, preflight func() error) *cobra.Comma
 		},
 	)
 	return root
+}
+
+func newFolderCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	root := &cobra.Command{
+		Use:   cmdFolder,
+		Short: "Manage encrypted folder vaults",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	root.AddCommand(
+		newFolderNamedCommand(ctx, preflight, folderAdd, "Register an encrypted folder vault"),
+		newFolderUnlockCommand(ctx, preflight),
+		newFolderNamedCommand(ctx, preflight, folderLock, "Lock and unmount an encrypted folder vault"),
+		newFolderStatusCommand(ctx, preflight),
+		newFolderNamedCommand(ctx, preflight, folderPath, "Print a mounted folder vault path"),
+	)
+	return root
+}
+
+func newFolderNamedCommand(ctx *runtimeContext, preflight func() error, subcommand string, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:   subcommand + " NAME",
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			return runFolder(ctx.opts, []string{subcommand, args[0]}, ctx.stdin, ctx.stdout, ctx.stderr)
+		},
+	}
+}
+
+func newFolderUnlockCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	hold := false
+	cmd := &cobra.Command{
+		Use:   folderUnlock + " NAME",
+		Short: "Unlock and mount an encrypted folder vault",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			parseArgs := []string{folderUnlock}
+			if hold {
+				parseArgs = append(parseArgs, "--hold")
+			}
+			parseArgs = append(parseArgs, args[0])
+			return runFolder(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+		},
+	}
+	cmd.Flags().BoolVar(&hold, "hold", false, "accepted for compatibility; unlock already holds the mount in the foreground")
+	if flag := cmd.Flags().Lookup("hold"); flag != nil {
+		flag.Hidden = true
+	}
+	return cmd
+}
+
+func newFolderStatusCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	return &cobra.Command{
+		Use:   folderStatus + " [NAME]",
+		Short: "Show encrypted folder vault status",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			parseArgs := append([]string{folderStatus}, args...)
+			return runFolder(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+		},
+	}
 }
 
 func newPathCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {

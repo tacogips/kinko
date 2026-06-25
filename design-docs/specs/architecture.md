@@ -180,6 +180,175 @@ Timeout:
 
 ## Command Runtime Data Flow
 
+### Folder Vault Architecture
+
+Folder vaults extend kinko from key/value environment secret management into
+project-scoped encrypted directories. A folder vault is registered by name
+under the current path scope and appears in the project tree only while it is
+unlocked.
+
+Initial goals:
+- `kinko folder add <name>` registers `<current-path>/<name>` as an encrypted
+  folder vault and adds the plaintext folder path to `.gitignore`.
+- `kinko folder unlock <name>` creates or opens the encrypted backing store,
+  mounts it at `<current-path>/<name>`, keeps kinko in the foreground as the
+  mount owner, and soft-unmounts the folder when the command exits.
+- `kinko folder lock <name>` performs a normal, non-force detach/unmount.
+- `kinko folder path <name>` prints the plaintext mount path only when the
+  folder is mounted.
+- `kinko folder status [name]` reports configured folders and mount state.
+
+Non-goals for the initial implementation:
+- no long-lived daemon or LaunchAgent,
+- no force unmount by default,
+- no claim that same-UID processes are cryptographically prevented from reading
+  an already mounted plaintext path,
+- no cross-platform encrypted container format compatibility.
+
+#### Storage Layout
+
+Folder vault metadata is stored in the encrypted config payload, not in the
+plaintext bootstrap config. The encrypted backing data lives under the kinko
+data directory so repository trees contain only the transient plaintext mount
+path.
+
+```text
+<kinko-data-dir>/
+  folders/
+    <folder-id>/
+      meta.json              # non-secret operational metadata
+      macos.sparsebundle/    # macOS encrypted disk image backend
+      linux.cipher/          # reserved for a future Linux backend
+
+<project>/
+  <name>/                    # plaintext mountpoint, present only while unlocked
+```
+
+`folder-id` is a stable digest of profile, normalized path, and folder name.
+Folder names are restricted to a single relative path element. Absolute paths,
+`..`, empty names, leading `-`, control characters, path separators, and
+existing non-directory files are rejected.
+
+Encrypted config shape:
+
+```go
+type FolderRecord struct {
+    Name       string
+    Profile    string
+    Path       string
+    Backend    string
+    FolderID   string
+    CreatedAt  time.Time
+    UpdatedAt  time.Time
+}
+```
+
+The mountpoint is intentionally not stored as trusted state; it is derived from
+the current registered path and name. This avoids stale absolute path metadata
+inside the encrypted config if a repository is moved.
+
+Because folder registrations are encrypted with the rest of the config payload,
+folder subcommands require an unlocked kinko session to read or mutate
+registration records. If `kinko lock` is run while a `kinko folder unlock`
+owner is still holding a mount, the owner process remains responsible for the
+soft-unmount on exit.
+
+#### Backend Selection
+
+Default backend selection is OS-specific:
+- macOS: `hdiutil` encrypted sparsebundle backend.
+- Linux: unsupported for the current release; do not advertise or select
+  `gocryptfs` yet.
+- Other OSes: folder vault commands fail with an unsupported-platform error.
+
+The backend interface isolates platform-specific command execution:
+
+```go
+type FolderBackend interface {
+    Ensure(ctx context.Context, record FolderRecord, secret string) error
+    Mount(ctx context.Context, record FolderRecord, secret string, mountpoint string) error
+    Unmount(ctx context.Context, record FolderRecord, mountpoint string) error
+    Status(ctx context.Context, record FolderRecord, mountpoint string) (FolderMountStatus, error)
+}
+```
+
+All subprocess calls must use argument arrays, never shell interpolation. The
+environment passed to backend commands is minimal and must not inherit arbitrary
+secret-bearing environment variables.
+
+macOS backend:
+- creates an encrypted sparsebundle with `hdiutil create` when the backing
+  image does not exist,
+- attaches with `hdiutil attach -mountpoint <project>/<name>`,
+- detaches with `hdiutil detach <mountpoint>`,
+- reports busy detach failures without force by default.
+
+Linux backend:
+- remains gated behind unsupported-platform behavior for the current release,
+- must not advertise `gocryptfs` as enabled in backend metadata,
+- may use `gocryptfs` in a later phase once install, FUSE permission, lifecycle,
+  and diagnostics requirements are ready.
+
+#### Unlock And Lifecycle
+
+Folder unlock requires the normal kinko vault session to be unlocked at mount
+time. The folder backend passphrase is derived from the vault DEK plus folder
+identity and is never printed or stored as plaintext. Once the folder is
+mounted, a later `kinko lock` invalidates future secret reads and future mount
+attempts, but it does not silently force-detach the active folder mount. The
+foreground mount owner is the `kinko folder unlock` process, and it must
+soft-unmount when that command exits.
+
+Initial lifecycle behavior is intentionally conservative:
+- `unlock` refuses to mount over an existing non-empty directory,
+- `unlock` refuses to take ownership of an already-mounted folder,
+- `unlock` stays in the foreground after a successful mount and unmounts on
+  interrupt, terminate, or normal command exit,
+- `kinko lock` while `unlock` is still running leaves the mount intact until
+  the folder owner exits,
+- `lock` attempts a normal soft unmount/detach,
+- busy unmount errors surface a clear message and leave the mount intact to
+  avoid corrupting active writes; users must close files and retry
+  `kinko folder lock <name>`,
+- no force-detach flag is included until the risk model is separately designed.
+
+The daemon-free process lifecycle mode is the default unlock behavior:
+
+```bash
+kinko folder unlock private
+```
+
+This command mounts, waits in the foreground, then attempts a normal soft
+unmount when interrupted, terminated, or otherwise exiting. It improves cleanup
+ergonomics but is not a hard same-terminal security boundary without
+sandboxing. A later `kinko run --folder` can extend the same lifecycle around a
+child command.
+
+#### Security Boundary
+
+Folder vaults provide encryption at rest and reduce accidental repository
+leakage. They do not by themselves prevent another same-user process from
+reading the mounted plaintext directory if it can access the mount path. A
+future `kinko run --sandbox --folder <name>` design is required before kinko can
+make stronger process-tree visibility claims.
+
+`.gitignore` integration is a leak-prevention guardrail, not a confidentiality
+boundary. `folder add` appends the folder name to the project `.gitignore` when
+it is not already ignored, must avoid duplicating entries, and must preserve the
+permissions of an existing `.gitignore` file when appending. Backend storage
+is not created until the project `.gitignore` has first been validated as a
+local, snapshot-able file. Backend storage created during `folder add` remains
+provisional until the encrypted registration is committed; if registration
+fails, newly-created storage is removed so retries do not leave untracked
+ciphertext state. If the `.gitignore` guardrail is written but encrypted
+registration persistence then fails, kinko restores the previous `.gitignore`
+state, including file mode, so the command does not leave a half-applied
+project-tree mutation. Commented rules and negated rules are not treated as
+existing ignore coverage; literal folder names that begin with `#` or `!` are
+written with gitignore escaping. A project `.gitignore` that is a symlink is
+rejected rather than followed because kinko cannot safely provide project-local
+rollback semantics for a linked target.
+
 ### `kinko backup <directory>`
 
 1. Resolve output directory.

@@ -60,5 +60,6 @@
 ## tmps
 result
 **/tmp
+.riela/sessions/
 
 ## go binaries
