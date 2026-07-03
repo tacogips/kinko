@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -21,6 +22,12 @@ import (
 const mutationLockFileName = ".mutation.lock"
 const maxPasswordInputBytes = 4096
 const defaultPasswordFDReadTimeout = 5 * time.Second
+
+type mutationLockMetadata struct {
+	PID       int    `json:"pid"`
+	Hostname  string `json:"hostname"`
+	CreatedAt string `json:"created_at"`
+}
 
 func runPassword(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -35,38 +42,38 @@ func runPassword(opts globalOptions, args []string, stdin io.Reader, stdout, std
 }
 
 func runPasswordChange(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	inputOpts, err := parsePasswordChangeInputOptions(args)
+	if err != nil {
+		return err
+	}
+	return runPasswordChangeWithOptions(opts, inputOpts, stdin, stdout, stderr)
+}
+
+func parsePasswordChangeInputOptions(args []string) (passwordInputOptions, error) {
 	fs := flag.NewFlagSet("password change", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var (
-		currentStdin bool
-		newStdin     bool
-		forceTTY     bool
-		currentFD    int
-		newFD        int
-	)
-	currentFD = -1
-	newFD = -1
-	fs.BoolVar(&currentStdin, "current-stdin", false, "read current password from stdin")
-	fs.BoolVar(&newStdin, "new-stdin", false, "read new password from stdin")
-	fs.BoolVar(&forceTTY, "force-tty", false, "allow interactive prompts with redirected stdin")
-	fs.IntVar(&currentFD, "current-fd", -1, "read current password from file descriptor")
-	fs.IntVar(&newFD, "new-fd", -1, "read new password from file descriptor")
+	inputOpts := passwordInputOptions{
+		currentFD: -1,
+		newFD:     -1,
+	}
+	fs.BoolVar(&inputOpts.currentStdin, "current-stdin", false, "read current password from stdin")
+	fs.BoolVar(&inputOpts.newStdin, "new-stdin", false, "read new password from stdin")
+	fs.BoolVar(&inputOpts.forceTTY, "force-tty", false, "allow interactive prompts with redirected stdin")
+	fs.IntVar(&inputOpts.currentFD, "current-fd", -1, "read current password from file descriptor")
+	fs.IntVar(&inputOpts.newFD, "new-fd", -1, "read new password from file descriptor")
 
 	if err := fs.Parse(args); err != nil {
-		return newCLIError(exitCodePolicyFailed, "Invalid password change arguments.", err)
+		return passwordInputOptions{}, newCLIError(exitCodePolicyFailed, "Invalid password change arguments.", err)
 	}
 	if fs.NArg() != 0 {
-		return newCLIError(exitCodePolicyFailed, "password change does not accept positional arguments.", nil)
+		return passwordInputOptions{}, newCLIError(exitCodePolicyFailed, "password change does not accept positional arguments.", nil)
 	}
+	return inputOpts, nil
+}
 
-	current, next, err := readPasswordChangeInputs(stdin, stderr, passwordInputOptions{
-		currentStdin: currentStdin,
-		newStdin:     newStdin,
-		currentFD:    currentFD,
-		newFD:        newFD,
-		forceTTY:     forceTTY,
-	})
+func runPasswordChangeWithOptions(opts globalOptions, inputOpts passwordInputOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	current, next, err := readPasswordChangeInputs(stdin, stderr, inputOpts)
 	if err != nil {
 		return newCLIError(exitCodePolicyFailed, err.Error(), err)
 	}
@@ -111,7 +118,7 @@ func runPasswordChange(opts globalOptions, args []string, stdin io.Reader, stdou
 
 	newSalt := mustRandom(saltLength)
 	newKEK := deriveKEK(next, newSalt, params)
-	newWrappedDEK, err := encryptBlob(newKEK, oldDEK)
+	newWrappedDEK, err := encryptBlobWithAAD(newKEK, oldDEK, []byte(aeadContextWrappedDEKPass))
 	if err != nil {
 		return newCLIError(exitCodeIOFailed, "Failed to produce new password wrap.", err)
 	}
@@ -129,11 +136,18 @@ func runPasswordChange(opts globalOptions, args []string, stdin io.Reader, stdou
 	nextMeta.KDFParamsPassword = params
 	nextMeta.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
+	prevMeta := cloneVaultMeta(meta)
 	if err := saveMetaAtomically(opts.dataDir, &nextMeta); err != nil {
 		return newCLIError(exitCodeIOFailed, "Failed to persist password update atomically. No changes were applied.", err)
 	}
 
-	prevMeta := cloneVaultMeta(meta)
+	if err := deleteSessionWrapKeyForMeta(opts.dataDir, prevMeta); err != nil {
+		if rbErr := saveMetaAtomically(opts.dataDir, prevMeta); rbErr != nil {
+			return newCLIError(exitCodeIOFailed, "Failed to revoke previous session wrap key after password update, and rollback failed.", fmt.Errorf("revoke old wrap key: %v; rollback: %w", err, rbErr))
+		}
+		return newCLIError(exitCodeIOFailed, "Failed to revoke previous session wrap key. Password change was rolled back.", err)
+	}
+
 	if err := lockSessionWithWarning(opts.dataDir, stderr); err != nil {
 		if rbErr := saveMetaAtomically(opts.dataDir, prevMeta); rbErr != nil {
 			return newCLIError(exitCodeIOFailed, "Failed to revoke active sessions after password update, and rollback failed.", fmt.Errorf("revoke: %v; rollback: %w", err, rbErr))
@@ -362,18 +376,123 @@ func normalizeConfirmedPassword(next, confirm string) (string, error) {
 
 func acquireMutationLock(dataDir string) (func(), error) {
 	lockPath := filepath.Join(dataDir, "vault", mutationLockFileName)
+	return acquireMetadataLock(lockPath)
+}
+
+func acquireMetadataLock(lockPath string) (func(), error) {
+	metadata, err := currentMutationLockMetadata()
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode lock metadata: %w", err)
+	}
+	payload = append(payload, '\n')
+
+	for {
+		release, err := createMetadataLock(lockPath, payload)
+		if err == nil {
+			return release, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		takeover, err := canTakeOverMetadataLock(lockPath, metadata.Hostname)
+		if err != nil {
+			return nil, err
+		}
+		if !takeover {
+			return nil, lockConflictError(lockPath)
+		}
+		if err := os.Remove(lockPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("remove stale lock %s: %w", lockPath, err)
+		}
+	}
+}
+
+func createMetadataLock(lockPath string, payload []byte) (func(), error) {
 	f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("lock exists: %w", err)
-		}
 		return nil, err
+	}
+	if _, err := f.Write(payload); err != nil {
+		_ = f.Close()
+		_ = os.Remove(lockPath)
+		return nil, fmt.Errorf("write lock metadata: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(lockPath)
+		return nil, fmt.Errorf("sync lock metadata: %w", err)
 	}
 	release := func() {
 		_ = f.Close()
 		_ = os.Remove(lockPath)
 	}
 	return release, nil
+}
+
+func currentMutationLockMetadata() (mutationLockMetadata, error) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return mutationLockMetadata{}, fmt.Errorf("resolve hostname for lock metadata: %w", err)
+	}
+	return mutationLockMetadata{
+		PID:       os.Getpid(),
+		Hostname:  hostname,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}, nil
+}
+
+func canTakeOverMetadataLock(lockPath, hostname string) (bool, error) {
+	b, err := os.ReadFile(lockPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, fmt.Errorf("read lock metadata %s: %w", lockPath, err)
+	}
+	var metadata mutationLockMetadata
+	if err := json.Unmarshal(b, &metadata); err != nil {
+		return false, lockConflictError(lockPath)
+	}
+	if metadata.PID <= 0 || metadata.Hostname == "" || metadata.CreatedAt == "" {
+		return false, lockConflictError(lockPath)
+	}
+	if metadata.Hostname != hostname {
+		return false, lockConflictError(lockPath)
+	}
+	running, err := processIsRunning(metadata.PID)
+	if err != nil {
+		return false, lockConflictError(lockPath)
+	}
+	return !running, nil
+}
+
+func processIsRunning(pid int) (bool, error) {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false, err
+	}
+	err = process.Signal(syscall.Signal(0))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	if errors.Is(err, syscall.EPERM) {
+		return true, nil
+	}
+	return false, err
+}
+
+func lockConflictError(lockPath string) error {
+	return fmt.Errorf("lock exists at %s; if no kinko process is active, inspect the lock file and remove it manually", lockPath)
 }
 
 func saveMetaAtomically(dataDir string, meta *vaultMeta) error {

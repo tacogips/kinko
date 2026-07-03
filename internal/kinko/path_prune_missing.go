@@ -65,7 +65,10 @@ func runPathPruneMissing(opts globalOptions, args []string, stdin io.Reader, std
 	if err != nil {
 		return err
 	}
+	return runPathPruneMissingWithOptions(opts, pruneOpts, stdin, stdout, stderr)
+}
 
+func runPathPruneMissingWithOptions(opts globalOptions, pruneOpts pathPruneMissingOptions, stdin io.Reader, stdout, stderr io.Writer) error {
 	input := passwordVerificationInputFor(stdin, isTerminalReader)
 	dek, err := readVaultPasswordDEK(opts, input, stderr, "Re-enter password: ")
 	if err != nil {

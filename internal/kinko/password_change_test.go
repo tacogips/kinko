@@ -3,6 +3,8 @@ package kinko
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +51,51 @@ func TestRunPasswordChange_Success(t *testing.T) {
 	}
 	if err := unlockSession(opts.dataDir, 5*time.Minute, "next-password-456"); err != nil {
 		t.Fatalf("new password should unlock: %v", err)
+	}
+}
+
+func TestRunPasswordChange_RemovesOldSessionWrapKeyAccount(t *testing.T) {
+	fake := withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "current-password-123"); err != nil {
+		t.Fatal(err)
+	}
+	opts := globalOptions{
+		dataDir: dataDir,
+		profile: defaultProfile,
+		path:    filepath.Clean("/tmp/project"),
+	}
+	if err := unlockSession(opts.dataDir, 5*time.Minute, "current-password-123"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := loadMeta(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAccount := sessionWrapKeyAccount(opts.dataDir, before)
+	if _, ok := fake.data[fake.key(sessionWrapKeyService, oldAccount)]; !ok {
+		t.Fatal("expected old session wrap-key account before password change")
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	in := strings.NewReader("current-password-123\nnext-password-456\n")
+	if err := runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := fake.data[fake.key(sessionWrapKeyService, oldAccount)]; ok {
+		t.Fatal("old session wrap-key account should be removed after password change")
+	}
+	after, err := loadMeta(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.SessionPubKeyB64 == before.SessionPubKeyB64 {
+		t.Fatal("password change should rotate session key metadata")
 	}
 }
 
@@ -309,20 +356,116 @@ func TestRunPasswordChange_LegacyVaultUpgradesSessionKeyMetadata(t *testing.T) {
 func TestRunPasswordChange_MutationLockConflict(t *testing.T) {
 	opts := setupPasswordChangeFixture(t, "current-password-123")
 	lockPath := filepath.Join(opts.dataDir, "vault", mutationLockFileName)
-	if err := os.WriteFile(lockPath, []byte("lock"), 0o600); err != nil {
+	metadata := mutationLockMetadata{
+		PID:       os.Getpid(),
+		Hostname:  mustHostname(t),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	var out bytes.Buffer
 	var errBuf bytes.Buffer
 	in := strings.NewReader("current-password-123\nnext-password-456\n")
-	err := runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf)
+	err = runPassword(opts, []string{"change", "--current-stdin", "--new-stdin"}, in, &out, &errBuf)
 	if err == nil {
 		t.Fatal("expected lock conflict")
 	}
 	if code := ExitCode(err); code != exitCodeLockConflict {
 		t.Fatalf("unexpected exit code: got=%d want=%d err=%v", code, exitCodeLockConflict, err)
 	}
+	if !strings.Contains(errors.Unwrap(err).Error(), lockPath) || !strings.Contains(errors.Unwrap(err).Error(), "remove it manually") {
+		t.Fatalf("lock conflict should include recovery guidance, got: %v", err)
+	}
+}
+
+func TestAcquireMutationLock_WritesMetadataAndReleases(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+	lockPath := filepath.Join(opts.dataDir, "vault", mutationLockFileName)
+
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		t.Fatalf("acquire mutation lock: %v", err)
+	}
+	b, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read lock metadata: %v", err)
+	}
+	var metadata mutationLockMetadata
+	if err := json.Unmarshal(b, &metadata); err != nil {
+		t.Fatalf("decode lock metadata: %v", err)
+	}
+	if metadata.PID != os.Getpid() || metadata.Hostname == "" || metadata.CreatedAt == "" {
+		t.Fatalf("unexpected lock metadata: %#v", metadata)
+	}
+	release()
+	if fileExists(lockPath) {
+		t.Fatal("lock file should be removed on release")
+	}
+}
+
+func TestAcquireMutationLock_TakesOverStaleSameHostLock(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+	lockPath := filepath.Join(opts.dataDir, "vault", mutationLockFileName)
+	metadata := mutationLockMetadata{
+		PID:       99999999,
+		Hostname:  mustHostname(t),
+		CreatedAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	}
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		t.Fatalf("stale same-host lock should be taken over: %v", err)
+	}
+	defer release()
+	b, err = os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current mutationLockMetadata
+	if err := json.Unmarshal(b, &current); err != nil {
+		t.Fatal(err)
+	}
+	if current.PID != os.Getpid() {
+		t.Fatalf("lock metadata should be replaced by current owner: %#v", current)
+	}
+}
+
+func TestAcquireMutationLock_CorruptLockBlocks(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+	lockPath := filepath.Join(opts.dataDir, "vault", mutationLockFileName)
+	if err := os.WriteFile(lockPath, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := acquireMutationLock(opts.dataDir)
+	if err == nil {
+		t.Fatal("expected corrupt lock to block")
+	}
+	if !strings.Contains(err.Error(), lockPath) || !strings.Contains(err.Error(), "remove it manually") {
+		t.Fatalf("unexpected corrupt lock error: %v", err)
+	}
+}
+
+func mustHostname(t *testing.T) string {
+	t.Helper()
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hostname
 }
 
 func TestReadPasswordFromFD_RejectsOversizedInput(t *testing.T) {

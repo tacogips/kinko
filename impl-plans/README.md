@@ -44,6 +44,11 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
+| `p4-ux-diagnostics-maintainability.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `spec-command-reconciliation.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `crypto-session-hardening.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `folder-backup-explosion-lifecycle.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `module-path-and-cli-contracts.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
 | `kinko-folder-vault.md` | 2026-06-23 | `design-docs/specs/architecture.md#folder-vault-architecture`, `design-docs/specs/command.md#kinko-folder` |
 | `release-diff-remediation.md` | 2026-06-17 | `design-docs/specs/notes.md#release-diff-remediation-notes` |
 | `copy-values-between-scopes.md` | 2026-06-16 | `design-docs/specs/command.md#kinko-copy-local-to-local---from-path-dir-key`, `design-docs/specs/command.md#kinko-copy-local-to-shared-key`, `design-docs/specs/command.md#kinko-copy-shared-to-local-key` |

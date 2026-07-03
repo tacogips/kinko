@@ -24,6 +24,7 @@ const (
 	cmdPath      = "path"
 	cmdPassword  = "password"
 	cmdDirenv    = "direnv"
+	cmdDoctor    = "doctor"
 )
 
 const (
@@ -43,6 +44,7 @@ const (
 	folderAdd    = "add"
 	folderUnlock = "unlock"
 	folderLock   = "lock"
+	folderRemove = "remove"
 	folderStatus = "status"
 	folderPath   = "path"
 )

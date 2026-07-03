@@ -1,4 +1,4 @@
-module githus.com/tacogips/kinko
+module github.com/tacogips/kinko
 
 go 1.25.4
 

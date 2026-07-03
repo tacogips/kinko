@@ -183,6 +183,26 @@ func TestRunShow_CurrentScopeDoesNotRequirePasswordPrompt(t *testing.T) {
 	}
 }
 
+func TestRunShow_AllScopesUsesPasswordWhenSessionLocked(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var setupOut bytes.Buffer
+	if err := runSet(opts, []string{"--shared", "SECRET=shared"}, strings.NewReader(""), &setupOut); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockSession(opts.dataDir); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := runShow(opts, []string{"--all-scopes"}, strings.NewReader("pw\n"), &out, &errBuf); err != nil {
+		t.Fatalf("show --all-scopes should use password-derived DEK when locked: %v", err)
+	}
+	if !strings.Contains(out.String(), "SECRET=") {
+		t.Fatalf("expected all-scopes output after password re-entry, got %q", out.String())
+	}
+}
+
 func TestRunShow_AllScopesRevealVerifiesPasswordBeforeRedirectGuard(t *testing.T) {
 	opts := setupUnlockedForSet(t)
 	var setupOut bytes.Buffer
@@ -244,10 +264,10 @@ func TestRunShow_AllScopes_MaskedAndSortedByPathAndKey(t *testing.T) {
 	if !strings.HasPrefix(got, "# profile=default\n\n# shared\n") {
 		t.Fatalf("missing profile/shared headers: %q", got)
 	}
-	if !strings.Contains(got, "A_SHARED=sh****-a") {
+	if !strings.Contains(got, "A_SHARED=********") {
 		t.Fatalf("expected masked A_SHARED in output: %q", got)
 	}
-	if !strings.Contains(got, "Z_SHARED=sh****-z") {
+	if !strings.Contains(got, "Z_SHARED=********") {
 		t.Fatalf("expected masked Z_SHARED in output: %q", got)
 	}
 	if !strings.Contains(got, "# path="+pathAValue) || !strings.Contains(got, "# path="+pathBValue) {

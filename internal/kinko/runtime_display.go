@@ -35,13 +35,27 @@ func passwordVerificationInputFor(stdin io.Reader, isTerminal func(io.Reader) bo
 
 func verifyVaultPasswordForShow(opts globalOptions, stdin io.Reader, stderr io.Writer, prompt string) (io.Reader, error) {
 	input := passwordVerificationInputFor(stdin, isTerminalReader)
-	if err := verifyVaultPasswordFromInput(opts, input, stderr, prompt); err != nil {
+	if _, err := verifyVaultPasswordDEKFromInput(opts, input, stderr, prompt); err != nil {
 		return nil, err
 	}
 	return input.confirmationInput, nil
 }
 
+func verifyVaultPasswordDEKForShow(opts globalOptions, stdin io.Reader, stderr io.Writer, prompt string) ([]byte, io.Reader, error) {
+	input := passwordVerificationInputFor(stdin, isTerminalReader)
+	dek, err := verifyVaultPasswordDEKFromInput(opts, input, stderr, prompt)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dek, input.confirmationInput, nil
+}
+
 func verifyVaultPasswordFromInput(opts globalOptions, input passwordVerificationInput, stderr io.Writer, prompt string) error {
+	_, err := verifyVaultPasswordDEKFromInput(opts, input, stderr, prompt)
+	return err
+}
+
+func verifyVaultPasswordDEKFromInput(opts globalOptions, input passwordVerificationInput, stderr io.Writer, prompt string) ([]byte, error) {
 	var password string
 	var err error
 	if input.terminalSecret {
@@ -50,20 +64,21 @@ func verifyVaultPasswordFromInput(opts globalOptions, input passwordVerification
 		password, err = readSecretWithPromptBuffered(input.secretInput.(*bufio.Reader), stderr, prompt)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	return verifyVaultPasswordValue(opts, password)
 }
 
-func verifyVaultPasswordValue(opts globalOptions, password string) error {
+func verifyVaultPasswordValue(opts globalOptions, password string) ([]byte, error) {
 	meta, err := loadMeta(opts.dataDir)
 	if err != nil {
-		return fmt.Errorf("cannot verify password: %w", err)
+		return nil, fmt.Errorf("cannot verify password: %w", err)
 	}
-	if _, err := unwrapDEKWithPassword(meta, password); err != nil {
-		return errors.New("password verification failed")
+	dek, err := unwrapDEKWithPassword(meta, password)
+	if err != nil {
+		return nil, errors.New("password verification failed")
 	}
-	return nil
+	return dek, nil
 }
 
 func runGet(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -71,15 +86,25 @@ func runGet(opts globalOptions, args []string, stdin io.Reader, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	opts.force = opts.force || force
-	v, ok, err := getSecret(opts, key)
+	return runGetWithOptions(opts, getOptions{key: key, reveal: reveal, force: force}, stdin, stdout, stderr)
+}
+
+type getOptions struct {
+	key    string
+	reveal bool
+	force  bool
+}
+
+func runGetWithOptions(opts globalOptions, getOpts getOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	opts.force = opts.force || getOpts.force
+	v, ok, err := getSecret(opts, getOpts.key)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return errors.New("secret not found")
 	}
-	if reveal {
+	if getOpts.reveal {
 		if err := guardSensitiveOutput(opts, stdin, stdout, stderr, "reveal secret"); err != nil {
 			return err
 		}
@@ -130,21 +155,29 @@ func parseGetArgs(args []string) (string, bool, bool, error) {
 func runShow(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("show", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	reveal := false
-	allScopes := false
-	fs.BoolVar(&reveal, "reveal", false, "show plaintext")
-	fs.BoolVar(&allScopes, "all-scopes", false, "show shared and all path scopes in current profile (ignores --path)")
+	showOpts := showOptions{}
+	fs.BoolVar(&showOpts.reveal, "reveal", false, "show plaintext")
+	fs.BoolVar(&showOpts.allScopes, "all-scopes", false, "show shared and all path scopes in current profile (ignores --path)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if allScopes {
-		return runShowAllScopes(opts, stdin, stdout, stderr, reveal)
+	return runShowWithOptions(opts, showOpts, stdin, stdout, stderr)
+}
+
+type showOptions struct {
+	reveal    bool
+	allScopes bool
+}
+
+func runShowWithOptions(opts globalOptions, showOpts showOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	if showOpts.allScopes {
+		return runShowAllScopes(opts, stdin, stdout, stderr, showOpts.reveal)
 	}
 	shared, repoSpecific, err := showSecretScopes(opts)
 	if err != nil {
 		return err
 	}
-	if reveal {
+	if showOpts.reveal {
 		if err := guardSensitiveOutput(opts, stdin, stdout, stderr, "reveal all secrets"); err != nil {
 			return err
 		}
@@ -156,7 +189,7 @@ func runShow(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 		_, _ = fmt.Fprintln(stdout, "# shared")
 		for _, k := range sortedKeys(shared) {
 			v := shared[k]
-			if !reveal {
+			if !showOpts.reveal {
 				v = maskValue(v)
 			}
 			_, _ = fmt.Fprintf(stdout, "%s=%s\n", k, v)
@@ -169,7 +202,7 @@ func runShow(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 		_, _ = fmt.Fprintf(stdout, "# path=%s\n", opts.path)
 		for _, k := range sortedKeys(repoSpecific) {
 			v := repoSpecific[k]
-			if !reveal {
+			if !showOpts.reveal {
 				v = maskValue(v)
 			}
 			_, _ = fmt.Fprintf(stdout, "%s=%s\n", k, v)
@@ -179,7 +212,7 @@ func runShow(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 }
 
 func runShowAllScopes(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer, reveal bool) error {
-	confirmationInput, err := verifyVaultPasswordForShow(opts, stdin, stderr, "Re-enter password: ")
+	dek, confirmationInput, err := verifyVaultPasswordDEKForShow(opts, stdin, stderr, "Re-enter password: ")
 	if err != nil {
 		return err
 	}
@@ -188,7 +221,7 @@ func runShowAllScopes(opts globalOptions, stdin io.Reader, stdout, stderr io.Wri
 			return err
 		}
 	}
-	shared, pathsByScope, err := showAllSecretScopes(opts)
+	shared, pathsByScope, err := showAllSecretScopesWithDEK(opts, dek)
 	if err != nil {
 		return err
 	}
@@ -271,10 +304,7 @@ func normalizeStoredScopePath(path string) (string, error) {
 }
 
 func maskValue(v string) string {
-	if len(v) <= 4 {
-		return "****"
-	}
-	return v[:2] + strings.Repeat("*", len(v)-4) + v[len(v)-2:]
+	return "********"
 }
 
 func guardSensitiveOutput(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer, action string) error {
@@ -282,7 +312,7 @@ func guardSensitiveOutput(opts globalOptions, stdin io.Reader, stdout, stderr io
 		return errors.New("sensitive output blocked for non-tty/redirection (use --force)")
 	}
 	if isTerminalWriter(stdout) && opts.confirm {
-		ok, err := confirmPrompt(stdin, stderr, "Confirm "+action+"? [y/N]: ")
+		ok, err := confirmPromptTTYAware(stdin, stderr, "Confirm "+action+"? [y/N]: ")
 		if err != nil {
 			return err
 		}

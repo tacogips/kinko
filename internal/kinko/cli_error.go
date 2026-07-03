@@ -2,6 +2,7 @@ package kinko
 
 import (
 	"errors"
+	"os/exec"
 )
 
 const (
@@ -42,6 +43,10 @@ func ExitCode(err error) int {
 	var ce *cliError
 	if errors.As(err, &ce) {
 		return ce.code
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
 	}
 	return 1
 }

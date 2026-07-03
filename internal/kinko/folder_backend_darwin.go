@@ -6,11 +6,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+const hdiutilPath = "/usr/bin/hdiutil"
 
 type hdiutilFolderBackend struct {
 	dataDir string
@@ -48,7 +52,7 @@ func (b hdiutilFolderBackend) Ensure(ctx context.Context, record FolderRecord, s
 		"-stdinpass",
 		imagePath,
 	}
-	return runFolderBackendCommand(ctx, secret+"\n", "hdiutil", args...)
+	return runFolderBackendCommand(ctx, secret+"\n", hdiutilPath, args...)
 }
 
 func (b hdiutilFolderBackend) Mount(ctx context.Context, record FolderRecord, secret string, mountpoint string) error {
@@ -81,19 +85,23 @@ func (b hdiutilFolderBackend) Mount(ctx context.Context, record FolderRecord, se
 		"-mountpoint", mountpoint,
 		"-nobrowse",
 	}
-	return runFolderBackendCommand(ctx, secret+"\n", "hdiutil", args...)
+	return runFolderBackendCommand(ctx, secret+"\n", hdiutilPath, args...)
 }
 
 func (b hdiutilFolderBackend) Unmount(ctx context.Context, _ FolderRecord, mountpoint string) error {
-	return runFolderBackendCommand(ctx, "", "hdiutil", "detach", mountpoint)
+	return runFolderBackendCommand(ctx, "", hdiutilPath, "detach", mountpoint)
 }
 
 func (b hdiutilFolderBackend) Status(ctx context.Context, _ FolderRecord, mountpoint string) (FolderMountStatus, error) {
-	out, err := outputFolderBackendCommand(ctx, "hdiutil", "info")
+	out, err := outputFolderBackendCommand(ctx, hdiutilPath, "info", "-plist")
 	if err != nil {
 		return FolderMountStatus{}, err
 	}
-	if parseHdiutilInfoMounted(out, mountpoint) {
+	mounted, err := parseHdiutilInfoPlistMounted(out, mountpoint)
+	if err != nil {
+		return FolderMountStatus{}, err
+	}
+	if mounted {
 		return FolderMountStatus{Mounted: true, Detail: "mounted"}, nil
 	}
 	return FolderMountStatus{Mounted: false, Detail: "not mounted"}, nil
@@ -147,6 +155,46 @@ func parseHdiutilInfoMounted(info []byte, mountpoint string) bool {
 		}
 	}
 	return false
+}
+
+func parseHdiutilInfoPlistMounted(info []byte, mountpoint string) (bool, error) {
+	target := filepath.Clean(mountpoint)
+	decoder := xml.NewDecoder(bytes.NewReader(info))
+	expectMountPointValue := false
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("parse hdiutil plist: %w", err)
+		}
+		switch t := token.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "key":
+				var key string
+				if err := decoder.DecodeElement(&key, &t); err != nil {
+					return false, fmt.Errorf("parse hdiutil plist key: %w", err)
+				}
+				expectMountPointValue = strings.TrimSpace(key) == "mount-point"
+			case "string":
+				if !expectMountPointValue {
+					continue
+				}
+				var value string
+				if err := decoder.DecodeElement(&value, &t); err != nil {
+					return false, fmt.Errorf("parse hdiutil plist mount point: %w", err)
+				}
+				expectMountPointValue = false
+				if filepath.Clean(strings.TrimSpace(value)) == target {
+					return true, nil
+				}
+			default:
+				expectMountPointValue = false
+			}
+		}
+	}
 }
 
 func cleanHdiutilMountpointCandidate(candidate string) string {

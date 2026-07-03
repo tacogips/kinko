@@ -1,14 +1,15 @@
 package kinko
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"time"
 
-	"githus.com/tacogips/kinko/internal/build"
+	"github.com/tacogips/kinko/internal/build"
 
 	"github.com/spf13/cobra"
 )
@@ -58,6 +59,16 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 	root.PersistentFlags().BoolVar(&ctx.opts.confirm, "confirm", defaults.confirm, "confirm sensitive tty output")
 
 	finalizeOnlyPreflight := func() error {
+		dataDirExplicit := root.PersistentFlags().Changed("kinko-dir") || os.Getenv("KINKO_DATA_DIR") != ""
+		if !dataDirExplicit {
+			dataDir, ok, err := loadBootstrapDataDir(ctx.opts.configPath)
+			if err != nil {
+				return err
+			}
+			if ok {
+				ctx.opts.dataDir = dataDir
+			}
+		}
 		if err := finalizeGlobalOptions(&ctx.opts); err != nil {
 			return err
 		}
@@ -137,9 +148,24 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 		newPathCommand(ctx, preflight),
 		newDirenvCommand(ctx, preflight),
 		newPasswordCommand(ctx, preflight),
+		newDoctorCommand(ctx, finalizeOnlyPreflight),
 	)
 
 	return root, nil
+}
+
+func newDoctorCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	return &cobra.Command{
+		Use:   cmdDoctor,
+		Short: "Run local diagnostics",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			return runDoctor(ctx.opts, ctx.stdout)
+		},
+	}
 }
 
 func newBackupCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
@@ -148,25 +174,28 @@ func newBackupCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 	currentFD := -1
 	destPath := "."
 	cmd := &cobra.Command{
-		Use:   cmdBackup,
+		Use:   cmdBackup + " [directory]",
 		Short: "Create a password-locked ZIP backup",
-		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, args []string) error {
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 && cmd.Flags().Changed("dest-path") {
+				return errors.New("backup destination must be provided either as positional argument or --dest-path, not both")
+			}
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
-			if currentStdin {
-				parseArgs = append(parseArgs, "--current-stdin")
+			if len(args) == 1 {
+				destPath = args[0]
 			}
-			if forceTTY {
-				parseArgs = append(parseArgs, "--force-tty")
+			backupOpts := backupOptions{
+				input: backupInputOptions{
+					currentStdin: currentStdin,
+					currentFD:    currentFD,
+					forceTTY:     forceTTY,
+				},
+				destPath: destPath,
 			}
-			if currentFD >= 0 {
-				parseArgs = append(parseArgs, "--current-fd", strconv.Itoa(currentFD))
-			}
-			parseArgs = append(parseArgs, "--dest-path", destPath)
-			return runBackup(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runBackupWithOptions(ctx.opts, backupOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&currentStdin, "current-stdin", false, "read current password from stdin")
@@ -177,7 +206,7 @@ func newBackupCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 }
 
 func newUnlockCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
-	timeout := "9h"
+	timeout := 9 * time.Hour
 	cmd := &cobra.Command{
 		Use:   cmdUnlock,
 		Short: "Unlock vault session",
@@ -185,14 +214,14 @@ func newUnlockCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
-			if cmd.Flags().Changed("timeout") {
-				parseArgs = append(parseArgs, "--timeout", timeout)
+			unlockOpts := unlockOptions{
+				timeout:         timeout,
+				timeoutProvided: cmd.Flags().Changed("timeout"),
 			}
-			return runUnlock(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runUnlockWithOptions(ctx.opts, unlockOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
-	cmd.Flags().StringVar(&timeout, "timeout", "9h", "unlock timeout")
+	cmd.Flags().DurationVar(&timeout, "timeout", 9*time.Hour, "unlock timeout")
 	return cmd
 }
 
@@ -205,11 +234,11 @@ func newSetCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := append([]string{}, cmd.Flags().Args()...)
-			if shared {
-				parseArgs = append([]string{"--shared"}, parseArgs...)
+			setOpts := setOptions{
+				shared:      shared,
+				assignments: append([]string{}, cmd.Flags().Args()...),
 			}
-			return runSet(ctx.opts, parseArgs, ctx.stdin, ctx.stdout)
+			return runSetWithOptions(ctx.opts, setOpts, ctx.stdin, ctx.stdout)
 		},
 	}
 	cmd.Flags().BoolVar(&shared, "shared", false, "set keys in shared scope")
@@ -226,14 +255,17 @@ func newSetKeyCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := append([]string{}, cmd.Flags().Args()...)
-			if shared {
-				parseArgs = append(parseArgs, "--shared")
+			args := cmd.Flags().Args()
+			if len(args) != 1 {
+				return errors.New("set-key requires a key")
 			}
-			if cmd.Flags().Changed("value") {
-				parseArgs = append(parseArgs, "--value="+value)
+			setKeyOpts := setKeyOptions{
+				key:           args[0],
+				value:         value,
+				valueProvided: cmd.Flags().Changed("value"),
+				shared:        shared,
 			}
-			return runSetKey(ctx.opts, parseArgs, ctx.stdin, ctx.stdout)
+			return runSetKeyWithOptions(ctx.opts, setKeyOpts, ctx.stdin, ctx.stdout)
 		},
 	}
 	cmd.Flags().BoolVar(&shared, "shared", false, "set key in shared scope")
@@ -252,18 +284,22 @@ func newDeleteCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
-			if autoYes {
-				parseArgs = append(parseArgs, "--yes")
+			deleteOpts := deleteOptions{
+				autoYes:   autoYes,
+				deleteAll: deleteAll,
+				shared:    shared,
 			}
-			if deleteAll {
-				parseArgs = append(parseArgs, "--all")
+			args := cmd.Flags().Args()
+			if len(args) == 1 {
+				deleteOpts.key = args[0]
 			}
-			if shared {
-				parseArgs = append(parseArgs, "--shared")
+			if deleteOpts.deleteAll && len(args) > 0 {
+				return errors.New("delete --all cannot be combined with a key")
 			}
-			parseArgs = append(parseArgs, cmd.Flags().Args()...)
-			return runDelete(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			if !deleteOpts.deleteAll && len(args) != 1 {
+				return errors.New("delete requires a key or --all")
+			}
+			return runDeleteWithOptions(ctx.opts, deleteOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&shared, "shared", false, "delete from shared scope")
@@ -316,11 +352,13 @@ func newCopyLocalToLocalCommand(ctx *runtimeContext, preflight func() error) *co
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{copyLocalToLocal, args[0], "--from-path", fromPath}
-			if overwrite {
-				parseArgs = append(parseArgs, "--overwrite")
+			copyOpts := copySecretOptions{
+				Direction: copyDirectionLocalToLocal,
+				Key:       args[0],
+				FromPath:  fromPath,
+				Overwrite: overwrite,
 			}
-			return runCopy(ctx.opts, parseArgs, ctx.stdout)
+			return runCopyWithOptions(ctx.opts, copyOpts, ctx.stdout)
 		},
 	}
 	cmd.Flags().StringVar(&fromPath, "from-path", "", "source local path scope")
@@ -338,11 +376,12 @@ func newCopyDirectionCommand(ctx *runtimeContext, preflight func() error, direct
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{direction, args[0]}
-			if overwrite {
-				parseArgs = append(parseArgs, "--overwrite")
+			copyOpts := copySecretOptions{
+				Direction: copyDirection(direction),
+				Key:       args[0],
+				Overwrite: overwrite,
 			}
-			return runCopy(ctx.opts, parseArgs, ctx.stdout)
+			return runCopyWithOptions(ctx.opts, copyOpts, ctx.stdout)
 		},
 	}
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace existing destination keys")
@@ -360,14 +399,13 @@ func newMoveDirectionCommand(ctx *runtimeContext, preflight func() error, direct
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{direction, args[0]}
-			if overwrite {
-				parseArgs = append(parseArgs, "--overwrite")
+			moveOpts := moveSecretOptions{
+				Direction: moveDirection(direction),
+				Key:       args[0],
+				Overwrite: overwrite,
+				Yes:       autoYes,
 			}
-			if autoYes {
-				parseArgs = append(parseArgs, "--yes")
-			}
-			return runMove(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runMoveWithOptions(ctx.opts, moveOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace existing destination key")
@@ -385,11 +423,7 @@ func newGetCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{args[0]}
-			if reveal {
-				parseArgs = append(parseArgs, "--reveal")
-			}
-			return runGet(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runGetWithOptions(ctx.opts, getOptions{key: args[0], reveal: reveal}, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&reveal, "reveal", false, "show plaintext")
@@ -406,14 +440,7 @@ func newShowCommand(ctx *runtimeContext, preflight func() error) *cobra.Command 
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
-			if reveal {
-				parseArgs = append(parseArgs, "--reveal")
-			}
-			if allScopes {
-				parseArgs = append(parseArgs, "--all-scopes")
-			}
-			return runShow(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runShowWithOptions(ctx.opts, showOptions{reveal: reveal, allScopes: allScopes}, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&reveal, "reveal", false, "show plaintext values")
@@ -494,6 +521,7 @@ func newFolderCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 		newFolderNamedCommand(ctx, preflight, folderAdd, "Register an encrypted folder vault"),
 		newFolderUnlockCommand(ctx, preflight),
 		newFolderNamedCommand(ctx, preflight, folderLock, "Lock and unmount an encrypted folder vault"),
+		newFolderRemoveCommand(ctx, preflight),
 		newFolderStatusCommand(ctx, preflight),
 		newFolderNamedCommand(ctx, preflight, folderPath, "Print a mounted folder vault path"),
 	)
@@ -509,7 +537,17 @@ func newFolderNamedCommand(ctx *runtimeContext, preflight func() error, subcomma
 			if err := preflight(); err != nil {
 				return err
 			}
-			return runFolder(ctx.opts, []string{subcommand, args[0]}, ctx.stdin, ctx.stdout, ctx.stderr)
+			folderOpts := folderNameOptions{name: args[0]}
+			switch subcommand {
+			case folderAdd:
+				return folderCommandError(runFolderAddWithOptions(ctx.opts, folderOpts, ctx.stdout))
+			case folderLock:
+				return folderCommandError(runFolderLockWithOptions(ctx.opts, folderOpts, ctx.stdout))
+			case folderPath:
+				return folderCommandError(runFolderPathWithOptions(ctx.opts, folderOpts, ctx.stdout))
+			default:
+				return folderCommandError(fmt.Errorf("unknown folder subcommand %q", subcommand))
+			}
 		},
 	}
 }
@@ -524,18 +562,38 @@ func newFolderUnlockCommand(ctx *runtimeContext, preflight func() error) *cobra.
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{folderUnlock}
-			if hold {
-				parseArgs = append(parseArgs, "--hold")
-			}
-			parseArgs = append(parseArgs, args[0])
-			return runFolder(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			folderOpts := folderUnlockOptions{name: args[0], hold: hold}
+			return folderCommandError(runFolderUnlockWithOptions(ctx.opts, folderOpts, ctx.stdout))
 		},
 	}
 	cmd.Flags().BoolVar(&hold, "hold", false, "accepted for compatibility; unlock already holds the mount in the foreground")
 	if flag := cmd.Flags().Lookup("hold"); flag != nil {
 		flag.Hidden = true
 	}
+	return cmd
+}
+
+func newFolderRemoveCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	keepStorage := false
+	yes := false
+	cmd := &cobra.Command{
+		Use:   folderRemove + " NAME",
+		Short: "Remove an encrypted folder vault registration",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			folderOpts := folderRemoveOptions{
+				name:        args[0],
+				keepStorage: keepStorage,
+				yes:         yes,
+			}
+			return folderCommandError(runFolderRemoveWithOptions(ctx.opts, folderOpts, ctx.stdin, ctx.stdout, ctx.stderr))
+		},
+	}
+	cmd.Flags().BoolVar(&keepStorage, "keep-storage", false, "remove registration without deleting encrypted folder storage")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "delete encrypted folder storage without prompting")
 	return cmd
 }
 
@@ -548,8 +606,11 @@ func newFolderStatusCommand(ctx *runtimeContext, preflight func() error) *cobra.
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := append([]string{folderStatus}, args...)
-			return runFolder(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			folderOpts := folderStatusOptions{}
+			if len(args) == 1 {
+				folderOpts.name = args[0]
+			}
+			return folderCommandError(runFolderStatusWithOptions(ctx.opts, folderOpts, ctx.stdout))
 		},
 	}
 }
@@ -582,17 +643,12 @@ func newPathPruneMissingCommand(ctx *runtimeContext, preflight func() error) *co
 			if allProfiles && explicitLongFlag(ctx.rawArgs, "profile") {
 				return fmt.Errorf("%s %s cannot combine --all-profiles with explicit --profile", cmdPath, pathPruneMissing)
 			}
-			parseArgs := []string{}
-			if allProfiles {
-				parseArgs = append(parseArgs, "--all-profiles")
+			pruneOpts := pathPruneMissingOptions{
+				AllProfiles: allProfiles,
+				Yes:         autoYes,
+				JSON:        jsonOutput,
 			}
-			if autoYes {
-				parseArgs = append(parseArgs, "--yes")
-			}
-			if jsonOutput {
-				parseArgs = append(parseArgs, "--json")
-			}
-			return runPathPruneMissing(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runPathPruneMissingWithOptions(ctx.opts, pruneOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&allProfiles, "all-profiles", false, "scan every stored profile")
@@ -627,16 +683,16 @@ func newExportCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
+			exportOpts := exportOptions{
+				shell:             shellPosix,
+				withScopeComments: withScopeComments,
+				sharedOnly:        sharedOnly,
+				excludeKeys:       append([]string{}, exclude...),
+			}
 			if len(args) == 1 {
-				parseArgs = append(parseArgs, args[0])
+				exportOpts.shell = args[0]
 			}
-			parseArgs = append(parseArgs, "--with-scope-comments="+strconv.FormatBool(withScopeComments))
-			parseArgs = append(parseArgs, "--shared-only="+strconv.FormatBool(sharedOnly))
-			for _, v := range exclude {
-				parseArgs = append(parseArgs, "--exclude", v)
-			}
-			return runExport(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runExportWithOptions(ctx.opts, exportOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&withScopeComments, "with-scope-comments", true, "include scope comments")
@@ -658,21 +714,17 @@ func newImportCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
+			importOpts := importOptions{
+				shell:             shellPosix,
+				filePath:          filePath,
+				autoYes:           autoYes,
+				confirmWithValues: confirmWithValues,
+				allowShared:       allowShared,
+			}
 			if len(args) == 1 {
-				parseArgs = append(parseArgs, args[0])
+				importOpts.shell = args[0]
 			}
-			if filePath != "" {
-				parseArgs = append(parseArgs, "--file", filePath)
-			}
-			if autoYes {
-				parseArgs = append(parseArgs, "--yes")
-			}
-			if confirmWithValues {
-				parseArgs = append(parseArgs, "--confirm-with-values")
-			}
-			parseArgs = append(parseArgs, "--allow-shared="+strconv.FormatBool(allowShared))
-			return runImport(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runImportWithOptions(ctx.opts, importOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().StringVar(&filePath, "file", "", "import source file path")
@@ -693,16 +745,12 @@ func newExecCommand(ctx *runtimeContext, preflight func() error) *cobra.Command 
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
-			if includeAll {
-				parseArgs = append(parseArgs, "--all")
+			execOpts := execOptions{
+				includeAll: includeAll,
+				envList:    env,
+				cmdArgs:    append([]string{}, cmd.Flags().Args()...),
 			}
-			if strings.TrimSpace(env) != "" {
-				parseArgs = append(parseArgs, "--env", env)
-			}
-			parseArgs = append(parseArgs, "--")
-			parseArgs = append(parseArgs, cmd.Flags().Args()...)
-			return runExec(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runExecWithOptions(ctx.opts, execOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&includeAll, "all", false, "inject all resolved secrets")
@@ -745,16 +793,16 @@ func newDirenvCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
-			parseArgs = append(parseArgs, "--with-scope-comments="+strconv.FormatBool(withScopeComments))
-			parseArgs = append(parseArgs, "--shared-only="+strconv.FormatBool(sharedOnly))
-			for _, v := range exclude {
-				parseArgs = append(parseArgs, "--exclude", v)
+			exportOpts := exportOptions{
+				shell:             shellBash,
+				withScopeComments: withScopeComments,
+				sharedOnly:        sharedOnly,
+				excludeKeys:       append([]string{}, exclude...),
 			}
 			if len(args) == 1 {
-				parseArgs = append(parseArgs, args[0])
+				exportOpts.shell = args[0]
 			}
-			return runDirenvExport(ctx.opts, parseArgs, ctx.stdin, ctx.stdout, ctx.stderr)
+			return runDirenvExportWithOptions(ctx.opts, exportOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	exportCmd.Flags().BoolVar(&withScopeComments, "with-scope-comments", true, "include scope comments")
@@ -777,23 +825,14 @@ func newPasswordChangeCommand(ctx *runtimeContext, preflight func() error) *cobr
 			if err := preflight(); err != nil {
 				return err
 			}
-			parseArgs := []string{}
-			if currentStdin {
-				parseArgs = append(parseArgs, "--current-stdin")
+			inputOpts := passwordInputOptions{
+				currentStdin: currentStdin,
+				newStdin:     newStdin,
+				currentFD:    currentFD,
+				newFD:        newFD,
+				forceTTY:     forceTTY,
 			}
-			if newStdin {
-				parseArgs = append(parseArgs, "--new-stdin")
-			}
-			if forceTTY {
-				parseArgs = append(parseArgs, "--force-tty")
-			}
-			if currentFD >= 0 {
-				parseArgs = append(parseArgs, "--current-fd", strconv.Itoa(currentFD))
-			}
-			if newFD >= 0 {
-				parseArgs = append(parseArgs, "--new-fd", strconv.Itoa(newFD))
-			}
-			return runPassword(ctx.opts, append([]string{"change"}, parseArgs...), ctx.stdin, ctx.stdout, ctx.stderr)
+			return runPasswordChangeWithOptions(ctx.opts, inputOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&currentStdin, "current-stdin", false, "read current password from stdin")

@@ -1,10 +1,20 @@
 package kinko
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
+	"strings"
 	"testing"
 )
+
+func deriveSessionKeyPairFromPassword(password string) (ed25519.PublicKey, ed25519.PrivateKey) {
+	seed := sha256.Sum256([]byte("kinko.session.seed.v1:password:" + strings.TrimSpace(password)))
+	priv := ed25519.NewKeyFromSeed(seed[:])
+	pub := priv.Public().(ed25519.PublicKey)
+	return pub, priv
+}
 
 func TestEncryptDecryptBlob(t *testing.T) {
 	key := mustRandom(32)
@@ -38,6 +48,42 @@ func TestEncryptDecryptBlob_WithInjectedMockKeyResolver(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(plain) != "hello" {
+		t.Fatalf("plain=%q", string(plain))
+	}
+}
+
+func TestEncryptDecryptBlob_WithAADContext(t *testing.T) {
+	key := mustRandom(32)
+	blob, err := encryptBlobWithAAD(key, []byte("hello"), []byte(aeadContextVaultData))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plain, err := decryptBlobWithAAD(key, blob, []byte(aeadContextVaultData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plain) != "hello" {
+		t.Fatalf("plain=%q", string(plain))
+	}
+
+	if _, err := decryptBlobWithAAD(key, blob, []byte(aeadContextConfig)); !errors.Is(err, errDecryptFailed) {
+		t.Fatalf("expected context mismatch decrypt failure, got %v", err)
+	}
+}
+
+func TestDecryptBlobWithAAD_AcceptsLegacyNilAADBlob(t *testing.T) {
+	key := mustRandom(32)
+	blob, err := encryptBlob(key, []byte("legacy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plain, err := decryptBlobWithAAD(key, blob, []byte(aeadContextVaultData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plain) != "legacy" {
 		t.Fatalf("plain=%q", string(plain))
 	}
 }

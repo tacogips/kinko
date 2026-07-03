@@ -94,31 +94,13 @@ Guardrails:
 
 ## Release-Diff Remediation Notes
 
-Context:
-- Review range: `v0.1.2..HEAD` on latest `origin/main`.
-- Parent review handoff: `codex-recent-change-quality-loop:riel-codex-recent-change-quality-loop-1781657586-b51d8611:step3-handoff`.
-- Blocking findings are limited to `internal/kinko/runtime.go` maintainability and `dist/release/SHA256SUMS` release artifact consistency.
-
-Runtime file organization decision:
-- `internal/kinko/runtime.go` must be split along cohesive package-internal runtime boundaries when it reaches or exceeds the Go source file size limit in `.agents/skills/go-coding-standards/SKILL.md`.
-- The split must preserve the public package surface, CLI behavior, command output, prompt order, error behavior, and tests.
-- Preferred boundaries are command/runtime concerns already present in the package, such as import parsing, export rendering, delete/show behavior, set helpers, backup helpers, and shared scope helpers.
-- New files remain in package `kinko`; this is an internal organization change, not an architecture or API change.
-- Adapter-specific behavior is not introduced by this remediation.
-
-Release artifact manifest decision:
-- `dist/release/SHA256SUMS` is the verification source for tracked files in `dist/release/`.
-- The release directory must use one consistent policy per commit:
-  - if multiple release versions are tracked, every tracked archive must have a checksum entry; or
-  - if only the latest release is represented by the manifest, older tracked archives must be removed in the same change.
-- For the current post-`v0.1.2` review, the preferred remediation is to include checksum entries for every tracked `dist/release/kinko_*` archive so the historical baseline artifacts and newer artifacts can be verified together.
-- Verification must include `cd dist/release && shasum -a 256 -c SHA256SUMS` and an explicit tracked-file coverage check comparing `git ls-files dist/release` against `SHA256SUMS`.
-
-Rollout constraints:
-- Keep fixes scoped to this isolated review worktree.
-- Do not touch unrelated local worktrees named in workflow input.
-- Preserve current CLI behavior and public package surface.
-- Run `gofmt` on moved Go code and verify with `go test ./...`, `go vet ./...`, and review-range diff checks.
+Archived summary:
+- Runtime files should be split along cohesive package-internal command/runtime
+  boundaries before any Go source file reaches the project size limit.
+- Release archives and `dist/release/SHA256SUMS` must use one consistent
+  tracked-artifact policy per commit and be verified together.
+- Preserve CLI behavior, public package surface, prompt order, and error
+  behavior when applying release-diff remediation.
 
 ## Use Cases
 
@@ -162,5 +144,27 @@ Expected behavior:
 - If locked, `kinko` exits with locked status code and clear unlock guidance.
 - No plaintext secret file is created in repository tree.
 - Because direnv is non-interactive, it should use `--force --confirm=false`.
+
+---
+
+## Code and Specification Review (2026-07)
+
+A full review of the specs and Go implementation was performed in July 2026,
+covering correctness defects, spec/implementation divergences, security
+observations, folder-vault lifecycle gaps, and code-quality improvements.
+
+Findings are numbered `F-01`..`F-35` with severities and a prioritized
+remediation plan. Completed remediation now covers P0 module/fish/backup CLI
+contracts, P1 folder-vault backup/explosion/removal/lifecycle lock items, and
+P2 crypto/key-handling hardening for legacy session metadata, backup password
+wording, AEAD context binding, macOS `hdiutil` invocation, and password-change
+keychain cleanup, and P3 spec/command reconciliation for unlock timeout,
+bootstrap data-dir resolution, command-surface docs, flag tables, export
+examples, permission-scope wording, data-model/session architecture, all-scopes
+authorization, import input exclusivity, and folder relocation behavior.
+Remaining work is the P4 UX, diagnostics, parser behavior, and maintainability
+findings.
+
+Detailed findings: `design-docs/specs/design-review-findings-2026-07.md`
 
 ---

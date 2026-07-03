@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"githus.com/tacogips/kinko/internal/kinko"
+	"github.com/tacogips/kinko/internal/kinko"
 )
 
 func main() {

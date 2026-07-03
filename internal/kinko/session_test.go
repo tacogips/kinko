@@ -105,6 +105,17 @@ func TestUnlockSession_TokenDoesNotStoreRawDEK(t *testing.T) {
 	if _, ok := payloadMap["enc_dek"]; !ok {
 		t.Fatal("payload must include enc_dek")
 	}
+	var payload sessionPayload
+	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+		t.Fatal(err)
+	}
+	var encDEK encryptedBlob
+	if err := json.Unmarshal([]byte(payload.EncDEK), &encDEK); err != nil {
+		t.Fatal(err)
+	}
+	if got := encDEK.AADB64; got != base64.StdEncoding.EncodeToString([]byte(aeadContextSessionDEK)) {
+		t.Fatalf("session DEK AAD=%q want session context", got)
+	}
 
 	dek, err := loadUnlockedDEK(dataDir)
 	if err != nil {

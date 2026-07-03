@@ -35,7 +35,7 @@
             ldflags = [
               "-s"
               "-w"
-              "-X githus.com/tacogips/kinko/internal/build.version=${version}"
+              "-X github.com/tacogips/kinko/internal/build.version=${version}"
             ];
             meta = with pkgs.lib; {
               description = "A Golang project";
@@ -71,7 +71,7 @@
           ];
 
           shellHook = ''
-            export GOPATH="$HOME/.cache/go/githus.com/tacogips/kinko"
+            export GOPATH="$HOME/.cache/go/github.com/tacogips/kinko"
             export GOMODCACHE="$HOME/.cache/go/mod"
             mkdir -p "$GOPATH" "$GOMODCACHE"
             echo "Go development environment ready"

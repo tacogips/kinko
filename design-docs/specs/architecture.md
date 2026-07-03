@@ -61,10 +61,11 @@ secret_id = hash(profile + "\x00" + normalized_path + "\x00" + key)
 ```
 
 Vault plaintext object (before encryption):
-- `version`
-- `profiles`: map profile -> path-map
-- `paths`: map normalized_path -> key-values
-- metadata per entry: `updated_at`, `updated_by`, `value_checksum` (optional)
+- `profiles`: map profile -> normalized path -> key -> value
+- `shared`: vault-wide key -> value map
+
+Per-entry IDs, timestamps, actor metadata, and value checksums are future schema
+extensions rather than fields in the current vault payload.
 
 Lookup policy:
 - Exact path-only matching is required (no ancestor/wildcard inheritance).
@@ -120,7 +121,9 @@ Implication:
 2. Argon2id derives the corresponding KEK from stored salt + KDF parameters.
 3. KEK unwraps `DEK`.
 4. `DEK` decrypts vault payload in memory.
-5. Decrypted key material is kept only in process memory and erased on `lock`/timeout.
+5. Decrypted key material is not persisted in plaintext. In-process cleanup is
+   best-effort memory hygiene within Go runtime limits and must not be
+   documented as guaranteed erasure.
 
 ### Integrity
 
@@ -145,21 +148,25 @@ What must never be stored locally in plaintext:
 Decision:
 - Shared unlock is required.
 
-Recommended implementation (preferred):
+Current implementation:
 1. `kinko unlock` authenticates user and unwraps `DEK`.
-2. A local daemon (`kinkod`) holds `DEK` in memory only.
-3. CLI commands (`kinko export`, `kinko exec`, `kinko get/show`) call daemon via Unix domain socket.
-4. Socket permissions (`0600`) and peer credential checks enforce same-user access.
-5. Daemon enforces unlock TTL and zeroizes `DEK` at expiry/lock.
+2. kinko creates or loads a random session wrap key in the OS keychain.
+3. kinko writes `lock/session.token`, which contains an expiry timestamp and
+   the `DEK` encrypted by that keychain-held wrap key.
+4. The token payload is signed by random session key metadata stored in
+   `meta.v1.json`.
+5. Later commands verify the token signature and expiry, load the wrap key from
+   the OS keychain, decrypt the session `DEK`, and continue.
 
-Alternative (file token) implementation:
-- Store time-bounded session artifact in `~/.local/kinko/lock/session.token`.
-- Artifact can be signed for integrity, but signature alone does not protect confidentiality.
-- To be secure, token must still require local secret material not persisted in plaintext.
+Future daemon option:
+- A local daemon (`kinkod`) could hold `DEK` in memory only and serve commands
+  over a same-user Unix domain socket.
+- That model remains future work, not current behavior.
 
 Conclusion:
 - Signature verification of expiry is useful for tamper detection.
-- Shared unlock security should rely on in-memory key custody (daemon) rather than reusable plaintext-equivalent tokens on disk.
+- Session confidentiality relies on the token plus OS keychain wrap key split;
+  the token alone is not plaintext-equivalent.
 
 ## Lock/Unlock Session Model
 
@@ -168,15 +175,17 @@ States:
 - `Unlocked(expires_at)`
 
 Rules:
-- `unlock` sets in-memory active session and expiry timer
+- `unlock` writes a signed session token with an expiry timer
 - Any secret-read operation checks lock state first
 - Auto-lock occurs when now >= expires_at
-- `lock` zeroizes in-memory key material immediately
+- `lock` removes `lock/session.token` and attempts best-effort session wrap-key
+  cleanup
 - `status` reports remaining unlocked duration
 
 Timeout:
-- Default `15m`
-- User-configurable via config/env/flag precedence
+- Default `9h`
+- User-configurable with `kinko unlock --timeout`; encrypted config and
+  environment timeout fallback are not current behavior.
 
 ## Command Runtime Data Flow
 
@@ -229,6 +238,12 @@ Folder names are restricted to a single relative path element. Absolute paths,
 `..`, empty names, leading `-`, control characters, path separators, and
 existing non-directory files are rejected.
 
+Current folder vault registrations are not relocatable. The encrypted
+registration lookup and folder secret derivation both bind the folder to the
+registered profile, normalized absolute path, name, and folder ID. Moving or
+renaming the project directory requires a future reattach/move workflow rather
+than transparent reuse of the old registration.
+
 Encrypted config shape:
 
 ```go
@@ -260,6 +275,10 @@ Default backend selection is OS-specific:
 - Linux: unsupported for the current release; do not advertise or select
   `gocryptfs` yet.
 - Other OSes: folder vault commands fail with an unsupported-platform error.
+
+The current macOS sparsebundle capacity is fixed at `1g`. User-selectable
+folder capacity, validation, and resize behavior are future folder-backend
+work.
 
 The backend interface isolates platform-specific command execution:
 
@@ -566,7 +585,10 @@ Forbidden in bootstrap plaintext:
 
 - `~/.local/kinko` and `~/.config/kinko`: `0700`
 - Vault/config files: `0600`
-- Refuse operation (or require `--force`) when insecure permissions are detected.
+- Current write paths create directories and files with restrictive modes.
+- Auditing and repairing permission drift on pre-existing files is future
+  `doctor`/repair work rather than a shared preflight requirement in the
+  current implementation.
 
 ## TUI Architecture (MVP)
 

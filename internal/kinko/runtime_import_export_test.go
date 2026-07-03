@@ -36,6 +36,53 @@ func TestParseImportAssignments_FishRoundTrip(t *testing.T) {
 	}
 }
 
+func TestParseImportAssignments_FishEscapes(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{name: "trailing backslash", value: `C:\path\`},
+		{name: "doubled backslash", value: `C:\\path`},
+		{name: "embedded single quote", value: "can't"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			line, err := renderShellAssignment(shellFish, "VALUE", tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := parseImportAssignments(shellFish, line+"\n")
+			if err != nil {
+				t.Fatalf("parse failed for %q: %v", line, err)
+			}
+			if got["VALUE"] != tc.value {
+				t.Fatalf("value=%q want=%q", got["VALUE"], tc.value)
+			}
+		})
+	}
+}
+
+func TestParseImportAssignments_FishRejectsInvalidEscapes(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "trailing backslash", line: `set -gx VALUE 'abc\';`},
+		{name: "unsupported escape", line: `set -gx VALUE 'abc\n';`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseImportAssignments(shellFish, tc.line+"\n")
+			if err == nil {
+				t.Fatal("expected parse error")
+			}
+			if !strings.Contains(err.Error(), "unsupported escape sequence") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseImportAssignments_NuRoundTrip(t *testing.T) {
 	line, err := renderShellAssignment(shellNu, "MSG", "hi\nthere")
 	if err != nil {
@@ -116,6 +163,16 @@ func TestParseImportAssignments_PosixCommonFormats(t *testing.T) {
 				t.Fatalf("value=%q want=%q", got[tc.key], tc.wantVal)
 			}
 		})
+	}
+}
+
+func TestParseImportAssignments_PreservesQuotedWhitespace(t *testing.T) {
+	got, err := parseImportAssignments(shellPosix, "export SPACED='  value  '\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["SPACED"] != "  value  " {
+		t.Fatalf("SPACED=%q", got["SPACED"])
 	}
 }
 
@@ -453,6 +510,36 @@ func TestRunExport_ExcludeRejectsInvalidKey(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid --exclude key \"1INVALID\"") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if code := ExitCode(err); code != exitCodePolicyFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodePolicyFailed)
+	}
+}
+
+func TestRunExport_LockedSessionExitCode(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	opts := globalOptions{
+		dataDir: dataDir,
+		profile: defaultProfile,
+		path:    t.TempDir(),
+		force:   true,
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	err := runExport(opts, []string{"posix"}, strings.NewReader(""), &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected locked session error")
+	}
+	if code := ExitCode(err); code != exitCodeIOFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeIOFailed)
+	}
 }
 
 func TestRunExport_ExcludeScopeCommentBehaviorWhenBlocksBecomeEmpty(t *testing.T) {
@@ -652,7 +739,7 @@ func TestRunImport_AcceptsSharedScopeMarkersWithoutAllowShared(t *testing.T) {
 	}
 }
 
-func TestRunImport_FileInputPreferredOverNonTTYStdin(t *testing.T) {
+func TestRunImport_RejectsFileAndNonEmptyStdin(t *testing.T) {
 	opts := setupUnlockedForSet(t)
 	filePath := filepath.Join(t.TempDir(), "envrc.private")
 	if err := os.WriteFile(filePath, []byte("export API_KEY='from-file'\n"), 0o600); err != nil {
@@ -662,7 +749,46 @@ func TestRunImport_FileInputPreferredOverNonTTYStdin(t *testing.T) {
 	stdinPayload := strings.NewReader("export API_KEY='from-stdin'\n")
 	var out bytes.Buffer
 	var errBuf bytes.Buffer
-	if err := runImport(opts, []string{"--yes", "--file", filePath}, stdinPayload, &out, &errBuf); err != nil {
+	err := runImport(opts, []string{"--yes", "--file", filePath}, stdinPayload, &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected --file plus stdin rejection")
+	}
+	if !strings.Contains(err.Error(), "either --file or stdin pipe") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code := ExitCode(err); code != exitCodePolicyFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodePolicyFailed)
+	}
+}
+
+func TestRunImport_MissingFileExitCode(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	missingPath := filepath.Join(t.TempDir(), "missing.env")
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	err := runImport(opts, []string{"--yes", "--file", missingPath}, strings.NewReader(""), &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected missing file error")
+	}
+	if !strings.Contains(err.Error(), "read --file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code := ExitCode(err); code != exitCodeIOFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeIOFailed)
+	}
+}
+
+func TestRunImport_FileInputAllowsEmptyRedirectedStdin(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	filePath := filepath.Join(t.TempDir(), "envrc.private")
+	if err := os.WriteFile(filePath, []byte("export API_KEY='from-file'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := runImport(opts, []string{"--yes", "--file", filePath}, strings.NewReader(""), &out, &errBuf); err != nil {
 		t.Fatal(err)
 	}
 	if got := valueAtScope(t, opts, "API_KEY"); got != "from-file" {
@@ -682,5 +808,27 @@ func TestRunImport_RejectsInvalidScopeMarker(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid scope marker") {
 		t.Fatalf("err=%v", err)
+	}
+	if code := ExitCode(err); code != exitCodePolicyFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodePolicyFailed)
+	}
+}
+
+func TestRunImport_MutationLockConflictExitCode(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	err = runImport(opts, []string{"--yes"}, strings.NewReader("export API_KEY='secret'\n"), &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected mutation lock conflict")
+	}
+	if code := ExitCode(err); code != exitCodeLockConflict {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeLockConflict)
 	}
 }

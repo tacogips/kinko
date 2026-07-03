@@ -95,25 +95,36 @@ func runInit(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 func runUnlock(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("unlock", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	timeout := 9 * time.Hour
-	fs.DurationVar(&timeout, "timeout", 9*time.Hour, "unlock timeout")
+	unlockOpts := unlockOptions{timeout: 9 * time.Hour}
+	fs.DurationVar(&unlockOpts.timeout, "timeout", 9*time.Hour, "unlock timeout")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return newCLIError(exitCodePolicyFailed, err.Error(), err)
 	}
-	timeoutProvided := false
+	if fs.NArg() != 0 {
+		return newCLIError(exitCodePolicyFailed, "unlock does not accept positional arguments", nil)
+	}
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "timeout" {
-			timeoutProvided = true
+			unlockOpts.timeoutProvided = true
 		}
 	})
+	return runUnlockWithOptions(opts, unlockOpts, stdin, stdout, stderr)
+}
+
+type unlockOptions struct {
+	timeout         time.Duration
+	timeoutProvided bool
+}
+
+func runUnlockWithOptions(opts globalOptions, unlockOpts unlockOptions, stdin io.Reader, stdout, stderr io.Writer) error {
 	locked, expiresAt, err := sessionStatus(opts.dataDir)
 	if err != nil {
-		return err
+		return newCLIError(exitCodeIOFailed, "Failed to inspect session status.", err)
 	}
 	if !locked {
-		if timeoutProvided {
+		if unlockOpts.timeoutProvided {
 			if err := lockSessionWithWarning(opts.dataDir, stderr); err != nil {
-				return fmt.Errorf("lock existing session before unlock refresh: %w", err)
+				return newCLIError(exitCodeIOFailed, "Lock existing session before unlock refresh failed.", err)
 			}
 		} else {
 			_, _ = fmt.Fprintf(stdout, "unlocked (auto-lock at %s)\n", formatAutoLockTimeLocal(expiresAt))
@@ -127,24 +138,39 @@ func runUnlock(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 	if preflightMode != "off" {
 		if err := ensureSessionSecretStoreReady(); err != nil {
 			if preflightMode == "required" {
-				return fmt.Errorf("keychain unavailable for unlock: %w", err)
+				return newCLIError(exitCodeIOFailed, "keychain unavailable for unlock", err)
 			}
 			_, _ = fmt.Fprintf(stderr, "WARNING: keychain preflight failed for unlock, continuing due to --keychain-preflight=best-effort: %v\n", err)
 		}
 	}
 
-	if err := unlockWithRetries(opts, timeout, stdin, stderr, maxCredentialAttempts); err != nil {
-		return err
+	if err := unlockWithRetries(opts, unlockOpts.timeout, stdin, stderr, maxCredentialAttempts); err != nil {
+		return newCLIError(unlockFailureExitCode(err), err.Error(), err)
 	}
 	locked, expiresAt, err = sessionStatus(opts.dataDir)
 	if err != nil {
-		return err
+		return newCLIError(exitCodeIOFailed, "Failed to inspect session status after unlock.", err)
 	}
 	if locked {
-		return errors.New("locked")
+		return newCLIError(exitCodeIOFailed, "locked", errors.New("session remained locked after unlock"))
 	}
 	_, _ = fmt.Fprintf(stdout, "unlocked (auto-lock at %s)\n", formatAutoLockTimeLocal(expiresAt))
 	return nil
+}
+
+func unlockFailureExitCode(err error) int {
+	if isUnlockCredentialFailure(err) {
+		return exitCodeAuthFailed
+	}
+	return exitCodeIOFailed
+}
+
+func isUnlockCredentialFailure(err error) bool {
+	if errors.Is(err, errUnlockCredential) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "credential mismatch") || strings.Contains(msg, "wrapped-key integrity failure")
 }
 
 func runLock(opts globalOptions, stderr io.Writer) error {

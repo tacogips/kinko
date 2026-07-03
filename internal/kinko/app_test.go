@@ -335,6 +335,9 @@ func TestRunUnlock_FailsFastWhenKeychainUnavailable(t *testing.T) {
 	if !strings.Contains(err.Error(), "keychain unavailable for unlock") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if code := ExitCode(err); code != exitCodeIOFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeIOFailed)
+	}
 }
 
 func TestRunUnlock_KeychainPreflightOffSkipsEarlyFailure(t *testing.T) {
@@ -367,6 +370,19 @@ func TestRunUnlock_KeychainPreflightOffSkipsEarlyFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "prepare session wrap key") {
 		t.Fatalf("expected wrap-key path failure, got: %v", err)
+	}
+	if code := ExitCode(err); code != exitCodeIOFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeIOFailed)
+	}
+}
+
+func TestRunUnlock_InvalidTimeoutExitCode(t *testing.T) {
+	err := runUnlock(globalOptions{}, []string{"--timeout", "not-a-duration"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected invalid timeout error")
+	}
+	if code := ExitCode(err); code != exitCodePolicyFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodePolicyFailed)
 	}
 }
 
@@ -607,6 +623,9 @@ func TestRunUnlock_WithTimeoutWhenAlreadyUnlockedRelocksBeforeCredentialFailure(
 	}
 	if !strings.Contains(err.Error(), "credential mismatch") {
 		t.Fatalf("expected credential mismatch, got: %v", err)
+	}
+	if code := ExitCode(err); code != exitCodeAuthFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeAuthFailed)
 	}
 	locked, _, statusErr := sessionStatus(dataDir)
 	if statusErr != nil {

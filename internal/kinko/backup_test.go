@@ -115,6 +115,11 @@ func TestRunBackup_CreatesPasswordLockedArchive(t *testing.T) {
 	if _, ok := entries[filepath.ToSlash(filepath.Join(backupArchiveRoot, "vault", mutationLockFileName))]; ok {
 		t.Fatal("mutation lock must not be included in backup archive")
 	}
+	for name := range entries {
+		if strings.HasPrefix(name, filepath.ToSlash(filepath.Join(backupArchiveRoot, "folders"))+"/") {
+			t.Fatalf("folder storage must not be included in backup archive: %q", name)
+		}
+	}
 
 	bootstrapName := filepath.ToSlash(filepath.Join(backupArchiveRoot, "config", filepath.Base(opts.configPath)))
 	if got := string(entries[bootstrapName]); !strings.Contains(got, "kinko_dir=") {
@@ -128,6 +133,40 @@ func TestRunBackup_CreatesPasswordLockedArchive(t *testing.T) {
 	}
 }
 
+func TestRunBackup_OmitsFolderStorage(t *testing.T) {
+	opts := setupBackupFixture(t)
+	bandPath := filepath.Join(opts.dataDir, "folders", "folder-id", "macos.sparsebundle", "bands", "0")
+	if err := os.MkdirAll(filepath.Dir(bandPath), 0o700); err != nil {
+		t.Fatalf("create sparsebundle fixture: %v", err)
+	}
+	if err := os.WriteFile(bandPath, []byte("sparse-band"), 0o600); err != nil {
+		t.Fatalf("write sparsebundle band: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := runBackup(opts, []string{"--current-stdin", "--dest-path", t.TempDir()}, strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("backup failed: %v", err)
+	}
+
+	archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
+	entries := readPasswordLockedZipEntries(t, archivePath, "pw")
+	for name := range entries {
+		if strings.HasPrefix(name, filepath.ToSlash(filepath.Join(backupArchiveRoot, "folders"))+"/") {
+			t.Fatalf("folder storage entry must be omitted, got %q", name)
+		}
+	}
+	manifestPath := filepath.ToSlash(filepath.Join(backupArchiveRoot, "manifest.json"))
+	var manifest backupManifest
+	if err := json.Unmarshal(entries[manifestPath], &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	for _, name := range manifest.Files {
+		if strings.HasPrefix(name, filepath.ToSlash(filepath.Join(backupArchiveRoot, "folders"))+"/") {
+			t.Fatalf("folder storage entry must be omitted from manifest, got %q", name)
+		}
+	}
+}
+
 func TestRunBackup_RejectsWrongPassword(t *testing.T) {
 	opts := setupBackupFixture(t)
 
@@ -135,8 +174,36 @@ func TestRunBackup_RejectsWrongPassword(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected backup to fail with wrong password")
 	}
+	if code := ExitCode(err); code != exitCodeAuthFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeAuthFailed)
+	}
 	if !strings.Contains(err.Error(), "current password is invalid") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunBackup_MutationLockConflictExitCode(t *testing.T) {
+	opts := setupBackupFixture(t)
+	lockPath := filepath.Join(opts.dataDir, "vault", mutationLockFileName)
+	metadata := mutationLockMetadata{
+		PID:       os.Getpid(),
+		Hostname:  mustHostname(t),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runBackup(opts, []string{"--current-stdin", "--dest-path", t.TempDir()}, strings.NewReader("pw\n"), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected lock conflict")
+	}
+	if code := ExitCode(err); code != exitCodeLockConflict {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeLockConflict)
 	}
 }
 
@@ -261,6 +328,61 @@ func TestRunBackup_DefaultsToCurrentWorkingDirectory(t *testing.T) {
 	if _, err := os.Stat(archivePath); err != nil {
 		t.Fatalf("backup archive missing: %v", err)
 	}
+}
+
+func TestRunBackup_DestinationArguments(t *testing.T) {
+	t.Run("positional destination is accepted", func(t *testing.T) {
+		opts := setupBackupFixture(t)
+		destDir := filepath.Join(t.TempDir(), "positional-dest")
+
+		var out bytes.Buffer
+		if err := runBackup(opts, []string{"--current-stdin", destDir}, strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("backup with positional destination failed: %v", err)
+		}
+
+		archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
+		if filepath.Dir(archivePath) != destDir {
+			t.Fatalf("backup archive dir=%q want=%q", filepath.Dir(archivePath), destDir)
+		}
+		if _, err := os.Stat(archivePath); err != nil {
+			t.Fatalf("backup archive missing: %v", err)
+		}
+	})
+
+	t.Run("dest-path flag remains accepted", func(t *testing.T) {
+		opts := setupBackupFixture(t)
+		destDir := filepath.Join(t.TempDir(), "flag-dest")
+
+		var out bytes.Buffer
+		if err := runBackup(opts, []string{"--current-stdin", "--dest-path", destDir}, strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("backup with --dest-path failed: %v", err)
+		}
+
+		archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
+		if filepath.Dir(archivePath) != destDir {
+			t.Fatalf("backup archive dir=%q want=%q", filepath.Dir(archivePath), destDir)
+		}
+	})
+
+	t.Run("positional destination and dest-path flag are rejected together", func(t *testing.T) {
+		err := runBackup(globalOptions{}, []string{"--dest-path", t.TempDir(), t.TempDir()}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+		if err == nil {
+			t.Fatal("expected mixed destination forms to be rejected")
+		}
+		if !strings.Contains(err.Error(), "either as positional argument or --dest-path") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("more than one positional destination is rejected", func(t *testing.T) {
+		err := runBackup(globalOptions{}, []string{t.TempDir(), t.TempDir()}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+		if err == nil {
+			t.Fatal("expected multiple positional destinations to be rejected")
+		}
+		if !strings.Contains(err.Error(), "at most one destination directory") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestCollectBackupSourceFiles_RejectsSymlinkInDataDir(t *testing.T) {

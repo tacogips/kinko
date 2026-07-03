@@ -188,6 +188,12 @@ sequenceDiagram
 
 This diagram shows where `DEK`, password-derived `KEK`, and session wrap key are used.
 
+Legacy note: vaults created before random session key metadata may have
+`meta.v1.json` without `session_key_source`. Run `kinko doctor` to check for
+that state. If it warns, unlock once with the current release, rotate the vault
+password with `kinko password change`, and treat old backups of `meta.v1.json`
+as sensitive metadata.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -290,7 +296,7 @@ kinko version
 ### Go (from module path)
 
 ```bash
-go install githus.com/tacogips/kinko/cmd/kinko@latest
+go install github.com/tacogips/kinko/cmd/kinko@latest
 kinko version
 ```
 
@@ -313,7 +319,7 @@ task build
 ### Go
 
 ```bash
-go build -ldflags "-s -w -X githus.com/tacogips/kinko/internal/build.version=$(cat internal/build/VERSION)" -o kinko ./cmd/kinko
+go build -ldflags "-s -w -X github.com/tacogips/kinko/internal/build.version=$(cat internal/build/VERSION)" -o kinko ./cmd/kinko
 ./kinko version
 ```
 
@@ -427,6 +433,11 @@ kinko copy local-to-shared API_KEY
 kinko copy shared-to-local API_KEY
 kinko move local-to-shared API_KEY --yes
 kinko move shared-to-local API_KEY --yes
+kinko folder add private
+kinko folder unlock private
+kinko folder lock private
+kinko folder remove private --yes
+kinko folder remove private --keep-storage
 kinko delete --all
 kinko delete --all --yes
 kinko explosion
@@ -440,6 +451,12 @@ Note:
 - `kinko show` prints grouped sections for the selected scope (`# shared` and `# path=<resolved path>`).
 - `kinko show --all-scopes` requires vault password re-entry before any output, enumerates all path scopes in the selected profile, and ignores `--path`.
 - `kinko delete --all` and `kinko delete --shared --all` confirm first in interactive mode, then require vault password re-entry only after confirmation; with `--yes`, password verification is still required before loading, listing, or mutation.
+
+### Folder Vaults
+
+`kinko folder add <name>` registers encrypted folder storage for the current profile and path. `kinko folder unlock <name>` mounts it in the foreground and `kinko folder lock <name>` soft-unmounts it. `kinko folder remove <name>` unregisters the folder and deletes encrypted storage by default after confirmation, or immediately with `--yes`; use `--keep-storage` to remove only the config record.
+
+Folder unlock, lock, and remove status-changing transitions are serialized per folder. The lifecycle lock is not held for the whole foreground mount lifetime.
 
 ### Path Scope Maintenance
 
@@ -502,10 +519,12 @@ kinko --profile default --path . exec --env API_KEY,DB_URL -- env | rg API_KEY
 
 ```bash
 kinko config show
-kinko config set unlock_timeout 9h
+kinko config set example_key example_value
 ```
 
-Config is stored encrypted at rest.
+Config is stored encrypted at rest. Unlock duration is controlled by
+`kinko unlock --timeout`; encrypted config does not currently set the unlock
+timeout.
 
 ### Password Change
 
@@ -637,6 +656,12 @@ kinko --config <path> <subcommand>
 kinko --keychain-preflight <required|best-effort|off> <subcommand>
 kinko --force <subcommand>
 kinko --confirm=<true|false> <subcommand>
+kinko folder add <name>
+kinko folder unlock <name>
+kinko folder lock <name>
+kinko folder remove <name> [--keep-storage] [--yes|-y]
+kinko folder status [name]
+kinko folder path <name>
 kinko set-key [--shared] <key> --value <value>
 kinko set [--shared] <key>=<value> [<key>=<value> ...]
 kinko delete [--shared] <key> [--yes|-y]
@@ -652,6 +677,7 @@ kinko show [--reveal] [--all-scopes]
 kinko profile list
 kinko path prune-missing [--all-profiles] [--yes|-y] [--json]
 kinko config show|set <key> <value>
+kinko doctor
 kinko export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
 kinko direnv export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
 kinko import [shell] [--file <path>] [--yes|-y] [--confirm-with-values] [--allow-shared]
@@ -663,5 +689,8 @@ Note:
 - `kinko show --all-scopes` requires vault password re-entry before any output, ignores `--path`, and prints every path scope in the selected profile.
 - `kinko path prune-missing` previews stale local path scopes by default, requires vault password re-entry before any metadata output, requires `--yes` for deletion, preserves shared scope data, supports `--all-profiles` and `--json`, and ignores `--path`.
 - `kinko copy local-to-local --from-path <dir> <key|*>`, `kinko copy local-to-shared <key|*>`, and `kinko copy shared-to-local <key|*>` preserve source keys and replace destination keys only with `--overwrite`; wildcard copies validate all conflicts before writing.
+- `kinko backup` excludes encrypted folder-vault storage under root `folders/`; folder vault backup is deferred until streaming/ZIP64 semantics are designed.
+- `kinko backup` writes standard password-locked ZIP archives using traditional PKZIP compatibility; treat that password as an access-control convenience, while the encrypted vault blobs remain the primary confidentiality boundary.
+- `kinko explosion` allows a safe root `folders/` directory, refuses registered mounted folders, and removes folder storage after confirmation.
 - `kinko move local-to-shared <key>` and `kinko move shared-to-local <key>` move exactly one key, require an unlocked session, preserve the encrypted vault format, and replace destination keys only with `--overwrite`; `--yes` skips only the move confirmation.
 - Interactive `kinko delete --all` and `kinko delete --shared --all` ask for destructive confirmation before password re-entry; declined confirmation prints `aborted` without asking for the password, while `--yes` still verifies the password before loading, listing, or mutation.

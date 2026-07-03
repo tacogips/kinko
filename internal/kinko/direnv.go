@@ -6,51 +6,57 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
 func runDirenvExport(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	exportOpts, err := parseDirenvExportOptions(args)
+	if err != nil {
+		return err
+	}
+	return runDirenvExportWithOptions(opts, exportOpts, stdin, stdout, stderr)
+}
+
+func parseDirenvExportOptions(args []string) (exportOptions, error) {
 	fs := flag.NewFlagSet("direnv export", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	withScopeComments := true
-	sharedOnly := false
 	rawExcludeKeys := stringListFlag{}
-	fs.BoolVar(&withScopeComments, "with-scope-comments", true, "include # kinko:scope markers in export output")
-	fs.BoolVar(&sharedOnly, "shared-only", false, "export only shared scope keys")
+	exportOpts := exportOptions{
+		shell:             shellBash,
+		withScopeComments: true,
+	}
+	fs.BoolVar(&exportOpts.withScopeComments, "with-scope-comments", true, "include # kinko:scope markers in export output")
+	fs.BoolVar(&exportOpts.sharedOnly, "shared-only", false, "export only shared scope keys")
 	fs.Var(&rawExcludeKeys, "exclude", "comma-separated key denylist to omit from export output (repeatable)")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return exportOptions{}, err
 	}
 
-	shell := shellBash
 	switch fs.NArg() {
 	case 0:
 	case 1:
-		shell = strings.ToLower(strings.TrimSpace(fs.Arg(0)))
-		if shell == "" {
-			return errors.New("shell name must not be empty")
+		exportOpts.shell = strings.ToLower(strings.TrimSpace(fs.Arg(0)))
+		if exportOpts.shell == "" {
+			return exportOptions{}, errors.New("shell name must not be empty")
 		}
 	default:
-		return errors.New("direnv export accepts at most one shell argument")
+		return exportOptions{}, errors.New("direnv export accepts at most one shell argument")
 	}
+	exportOpts.excludeKeys = append([]string{}, rawExcludeKeys...)
+	return exportOpts, nil
+}
 
+func runDirenvExportWithOptions(opts globalOptions, exportOpts exportOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	if strings.TrimSpace(exportOpts.shell) == "" {
+		return errors.New("shell name must not be empty")
+	}
 	scopePath := resolveDirenvScope(opts.path, os.Getenv("DIRENV_DIR"))
 	nonInteractive := opts
 	nonInteractive.path = scopePath
 	nonInteractive.force = true
 	nonInteractive.confirm = false
-
-	parseArgs := []string{
-		shell,
-		"--with-scope-comments=" + strconv.FormatBool(withScopeComments),
-		"--shared-only=" + strconv.FormatBool(sharedOnly),
-	}
-	for _, v := range rawExcludeKeys {
-		parseArgs = append(parseArgs, "--exclude", v)
-	}
-	return runExport(nonInteractive, parseArgs, stdin, stdout, stderr)
+	return runExportWithOptions(nonInteractive, exportOpts, stdin, stdout, stderr)
 }
 
 func resolveDirenvScope(fallbackPath, direnvDir string) string {

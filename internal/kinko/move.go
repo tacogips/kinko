@@ -33,7 +33,13 @@ func runMove(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 	if err != nil {
 		return err
 	}
+	return runMoveWithOptions(opts, moveOpts, stdin, stdout, stderr)
+}
 
+func runMoveWithOptions(opts globalOptions, moveOpts moveSecretOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	if err := validateMoveOptions(moveOpts); err != nil {
+		return err
+	}
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
 		return fmt.Errorf("vault mutation in progress: %w", err)
@@ -116,10 +122,24 @@ func parseMoveArgs(args []string) (moveSecretOptions, error) {
 		return moveSecretOptions{}, errors.New("move requires exactly one key")
 	}
 	opts.Key = positionals[1]
-	if err := validateEnvKey(opts.Key); err != nil {
-		return moveSecretOptions{}, err
+	return opts, validateMoveOptions(opts)
+}
+
+func validateMoveOptions(opts moveSecretOptions) error {
+	switch opts.Direction {
+	case moveDirectionLocalToShared, moveDirectionSharedToLocal:
+	case "":
+		return errors.New("move requires a direction")
+	default:
+		return fmt.Errorf("move: unknown direction %q", opts.Direction)
 	}
-	return opts, nil
+	if opts.Key == "" {
+		return errors.New("move requires a key")
+	}
+	if err := validateEnvKey(opts.Key); err != nil {
+		return err
+	}
+	return nil
 }
 
 func prepareMoveSecret(vd *vaultData, opts globalOptions, moveOpts moveSecretOptions) (moveSecretResult, string, error) {

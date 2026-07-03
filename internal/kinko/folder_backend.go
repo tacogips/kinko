@@ -64,7 +64,6 @@ func folderBackendName() string {
 
 func folderBackendEnv() []string {
 	return []string{
-		"PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 		"LANG=C",
 	}
 }

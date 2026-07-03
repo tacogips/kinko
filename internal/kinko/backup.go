@@ -37,6 +37,11 @@ type backupInputOptions struct {
 	forceTTY     bool
 }
 
+type backupOptions struct {
+	input    backupInputOptions
+	destPath string
+}
+
 type backupSourceFile struct {
 	sourcePath  string
 	archivePath string
@@ -56,78 +61,110 @@ type backupManifest struct {
 }
 
 func runBackup(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	backupOpts, err := parseBackupOptions(args)
+	if err != nil {
+		return err
+	}
+	return runBackupWithOptions(opts, backupOpts, stdin, stdout, stderr)
+}
+
+func parseBackupOptions(args []string) (backupOptions, error) {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var input backupInputOptions
-	destPath := "."
-	input.currentFD = -1
-	fs.BoolVar(&input.currentStdin, "current-stdin", false, "read current password from stdin")
-	fs.IntVar(&input.currentFD, "current-fd", -1, "read current password from file descriptor")
-	fs.BoolVar(&input.forceTTY, "force-tty", false, "allow interactive prompts with redirected stdin")
-	fs.StringVar(&destPath, "dest-path", ".", "destination directory for backup archive")
+	backupOpts := backupOptions{
+		input: backupInputOptions{
+			currentFD: -1,
+		},
+		destPath: ".",
+	}
+	fs.BoolVar(&backupOpts.input.currentStdin, "current-stdin", false, "read current password from stdin")
+	fs.IntVar(&backupOpts.input.currentFD, "current-fd", -1, "read current password from file descriptor")
+	fs.BoolVar(&backupOpts.input.forceTTY, "force-tty", false, "allow interactive prompts with redirected stdin")
+	fs.StringVar(&backupOpts.destPath, "dest-path", ".", "destination directory for backup archive")
 
 	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("invalid backup arguments: %w", err)
+		return backupOptions{}, fmt.Errorf("invalid backup arguments: %w", err)
 	}
-	if fs.NArg() != 0 {
-		return errors.New("backup does not accept positional arguments; use --dest-path to override the destination directory")
+	switch fs.NArg() {
+	case 0:
+	case 1:
+		if flagSetChanged(fs, "dest-path") {
+			return backupOptions{}, errors.New("backup destination must be provided either as positional argument or --dest-path, not both")
+		}
+		backupOpts.destPath = fs.Arg(0)
+	default:
+		return backupOptions{}, errors.New("backup accepts at most one destination directory")
 	}
+	return backupOpts, nil
+}
 
-	destDir, err := filepath.Abs(destPath)
+func runBackupWithOptions(opts globalOptions, backupOpts backupOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	destDir, err := filepath.Abs(backupOpts.destPath)
 	if err != nil {
-		return fmt.Errorf("resolve destination directory: %w", err)
+		return newCLIError(exitCodeIOFailed, "Failed to resolve backup destination.", err)
 	}
 	destDir = filepath.Clean(destDir)
 	dataDirAbs, err := filepath.Abs(opts.dataDir)
 	if err != nil {
-		return fmt.Errorf("resolve data directory: %w", err)
+		return newCLIError(exitCodeIOFailed, "Failed to resolve kinko data directory.", err)
 	}
 	dataDirAbs = filepath.Clean(dataDirAbs)
 
-	password, err := readBackupPasswordInput(stdin, stderr, input)
+	password, err := readBackupPasswordInput(stdin, stderr, backupOpts.input)
 	if err != nil {
 		return err
 	}
 	password, err = sanitizePasswordValue(password)
 	if err != nil {
-		return fmt.Errorf("current password is invalid: %w", err)
+		return newCLIError(exitCodeAuthFailed, "current password is invalid", err)
 	}
 
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
-		return fmt.Errorf("backup could not acquire mutation lock: %w", err)
+		return newCLIError(exitCodeLockConflict, "Backup could not acquire mutation lock.", err)
 	}
 	defer release()
 
 	if err := verifyCurrentBackupPassword(opts.dataDir, password); err != nil {
-		return err
+		return newCLIError(exitCodeAuthFailed, err.Error(), err)
 	}
 
 	entries, err := collectBackupArchiveEntries(opts)
 	if err != nil {
-		return err
+		return newCLIError(exitCodeIOFailed, err.Error(), err)
 	}
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
-		return fmt.Errorf("create destination directory: %w", err)
+		return newCLIError(exitCodeIOFailed, "Failed to create backup destination directory.", err)
 	}
 	if err := validateBackupDestinationDir(destDir, dataDirAbs); err != nil {
-		return err
+		return newCLIError(exitCodePolicyFailed, err.Error(), err)
 	}
 
 	archivePath := filepath.Join(destDir, backupArchiveFileName())
 	if _, err := os.Stat(archivePath); err == nil {
-		return fmt.Errorf("backup archive already exists: %s", archivePath)
+		err := fmt.Errorf("backup archive already exists: %s", archivePath)
+		return newCLIError(exitCodePolicyFailed, err.Error(), err)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("check backup archive path: %w", err)
+		return newCLIError(exitCodeIOFailed, "Failed to check backup archive path.", err)
 	}
 
 	if err := writePasswordLockedZip(archivePath, password, entries); err != nil {
-		return err
+		return newCLIError(exitCodeIOFailed, err.Error(), err)
 	}
 
 	_, _ = fmt.Fprintf(stdout, "backup written: %s\n", archivePath)
 	return nil
+}
+
+func flagSetChanged(fs *flag.FlagSet, name string) bool {
+	changed := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			changed = true
+		}
+	})
+	return changed
 }
 
 func readBackupPasswordInput(stdin io.Reader, stderr io.Writer, opts backupInputOptions) (string, error) {
@@ -322,6 +359,9 @@ func walkBackupDataFiles(dataDir string) ([]backupSourceFile, error) {
 
 func isTransientBackupPath(relPath string, d os.DirEntry) bool {
 	relPath = filepath.Clean(relPath)
+	if relPath == filepath.Join("folders") {
+		return d.IsDir()
+	}
 	if relPath == filepath.Join("lock") {
 		return d.IsDir()
 	}

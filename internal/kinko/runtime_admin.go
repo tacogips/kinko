@@ -2,6 +2,7 @@ package kinko
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -18,10 +19,22 @@ func runExplosion(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer)
 	_, _ = fmt.Fprintln(stderr, "DANGER: This will permanently delete all vault data in the current data dir.")
 	_, _ = fmt.Fprintln(stderr, "All registered data will be lost and this action cannot be undone.")
 	_, _ = fmt.Fprintln(stderr, "Password re-entry is required for this operation.")
-	if err := verifyExplosionPassword(opts, reader, stderr); err != nil {
+	dek, err := verifyExplosionPassword(opts, reader, stderr)
+	if err != nil {
 		return err
 	}
 	if err := validateExplosionTarget(opts.dataDir); err != nil {
+		return err
+	}
+	cfg, err := loadConfig(opts.dataDir, dek)
+	if err != nil {
+		return fmt.Errorf("load encrypted config: %w", err)
+	}
+	records, err := loadFolderRecordsFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if err := ensureNoMountedFolders(opts, records); err != nil {
 		return err
 	}
 	ok, err := confirmPrompt(reader, stderr, "Are you absolutely sure? [y/N]: ")
@@ -84,20 +97,33 @@ func validateKinkoDataDirLayout(dataDir string) error {
 	if err != nil {
 		return fmt.Errorf("read data dir: %w", err)
 	}
-	allowedRoot := map[string]bool{"vault": true, "lock": true}
+	allowedRoot := map[string]bool{"vault": true, "lock": true, "folders": true}
 	for _, entry := range rootEntries {
 		if !allowedRoot[entry.Name()] {
 			return fmt.Errorf("refusing explosion: unexpected entry in data dir: %s", filepath.Join(dataDir, entry.Name()))
 		}
 	}
 	for _, mustDir := range []string{"vault", "lock"} {
-		info, err := os.Stat(filepath.Join(dataDir, mustDir))
+		info, err := os.Lstat(filepath.Join(dataDir, mustDir))
 		if err != nil {
 			return fmt.Errorf("refusing explosion: missing required dir %s", filepath.Join(dataDir, mustDir))
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing explosion: %s must not be a symlink", filepath.Join(dataDir, mustDir))
 		}
 		if !info.IsDir() {
 			return fmt.Errorf("refusing explosion: %s must be a directory", filepath.Join(dataDir, mustDir))
 		}
+	}
+	if info, err := os.Lstat(folderStorageRoot(dataDir)); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing explosion: %s must not be a symlink", folderStorageRoot(dataDir))
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("refusing explosion: %s must be a directory", folderStorageRoot(dataDir))
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat folder storage root: %w", err)
 	}
 	vaultEntries, err := os.ReadDir(filepath.Join(dataDir, "vault"))
 	if err != nil {
@@ -135,6 +161,27 @@ func purgeKinkoDataFiles(dataDir string) error {
 			return fmt.Errorf("remove %s: %w", p, err)
 		}
 	}
+	if exists, err := folderStorageRootExists(dataDir); err != nil {
+		return err
+	} else if exists {
+		if err := os.RemoveAll(folderStorageRoot(dataDir)); err != nil {
+			return fmt.Errorf("remove folder storage root: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureNoMountedFolders(opts globalOptions, records []FolderRecord) error {
+	backend := newFolderBackend(opts.dataDir)
+	for _, record := range records {
+		status, err := backend.Status(context.Background(), record, folderMountpoint(record))
+		if err != nil {
+			return fmt.Errorf("check folder mount status for %s: %w", record.Name, err)
+		}
+		if status.Mounted {
+			return fmt.Errorf("refusing explosion: folder is mounted: %s", record.Name)
+		}
+	}
 	return nil
 }
 
@@ -166,12 +213,27 @@ func explosionConfirmationToken(dataDir string) string {
 	return strings.ToUpper(hex.EncodeToString(sum[:6]))
 }
 
-func verifyExplosionPassword(opts globalOptions, reader *bufio.Reader, stderr io.Writer) error {
+func verifyExplosionPassword(opts globalOptions, reader *bufio.Reader, stderr io.Writer) ([]byte, error) {
 	password, err := readSecretWithPromptBuffered(reader, stderr, "Re-enter password: ")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return verifyVaultPasswordValue(opts, password)
+	password, err = sanitizePasswordValue(password)
+	if err != nil {
+		return nil, fmt.Errorf("password is invalid: %w", err)
+	}
+	meta, err := loadMeta(opts.dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("load vault metadata: %w", err)
+	}
+	dek, err := unwrapDEKWithPassword(meta, password)
+	if err != nil {
+		if isCredentialMismatchError(err) {
+			return nil, errors.New("password is invalid")
+		}
+		return nil, fmt.Errorf("verify password: %w", err)
+	}
+	return dek, nil
 }
 
 func runConfig(opts globalOptions, args []string, stdout io.Writer) error {
@@ -317,6 +379,10 @@ func showAllSecretScopes(opts globalOptions) (map[string]string, map[string]map[
 	if err != nil {
 		return nil, nil, err
 	}
+	return showAllSecretScopesWithDEK(opts, dek)
+}
+
+func showAllSecretScopesWithDEK(opts globalOptions, dek []byte) (map[string]string, map[string]map[string]string, error) {
 	vd, err := loadVault(opts.dataDir, dek)
 	if err != nil {
 		return nil, nil, err

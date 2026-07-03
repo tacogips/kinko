@@ -12,7 +12,7 @@ vars:
   VERSION_FILE: internal/build/VERSION
   APP_VERSION:
     sh: cat {{.VERSION_FILE}}
-  LDFLAGS: -s -w -X githus.com/tacogips/kinko/internal/build.version={{.APP_VERSION}}
+  LDFLAGS: -s -w -X github.com/tacogips/kinko/internal/build.version={{.APP_VERSION}}
 
 tasks:
   default:

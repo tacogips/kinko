@@ -157,6 +157,28 @@ func TestRunSetKey_ExplicitEmptyValueFlagWorks(t *testing.T) {
 	}
 }
 
+func TestRunSetKey_ValueFlagPreservesWhitespace(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var out bytes.Buffer
+	if err := runSetKey(opts, []string{"A", "--value", "  spaced  "}, strings.NewReader("ignored\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := valueAtScope(t, opts, "A"); got != "  spaced  " {
+		t.Fatalf("A=%q", got)
+	}
+}
+
+func TestRunSetKey_StdinValueTrimsWhitespace(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var out bytes.Buffer
+	if err := runSetKey(opts, []string{"A"}, strings.NewReader("  spaced  \n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := valueAtScope(t, opts, "A"); got != "spaced" {
+		t.Fatalf("A=%q", got)
+	}
+}
+
 func TestRunSetKey_KeyFirstValueFlagWorks(t *testing.T) {
 	opts := setupUnlockedForSet(t)
 	var out bytes.Buffer
@@ -313,6 +335,9 @@ func TestRunDelete_AllWrongPasswordLeavesDataUnchanged(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected password verification failure")
 	}
+	if code := ExitCode(err); code != exitCodeAuthFailed {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeAuthFailed)
+	}
 	if !strings.Contains(err.Error(), "password verification failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -331,6 +356,28 @@ func TestRunDelete_AllWrongPasswordLeavesDataUnchanged(t *testing.T) {
 	}
 	if got := valueAtScope(t, opts, "B"); got != "2" {
 		t.Fatalf("B=%q", got)
+	}
+}
+
+func TestRunDelete_MutationLockConflictExitCode(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var out bytes.Buffer
+	if err := runSet(opts, []string{"A=1"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	out.Reset()
+	err = runDelete(opts, []string{"--yes", "A"}, strings.NewReader(""), &out, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected lock conflict")
+	}
+	if code := ExitCode(err); code != exitCodeLockConflict {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeLockConflict)
 	}
 }
 

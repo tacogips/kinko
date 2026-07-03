@@ -6,9 +6,22 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestHdiutilPathUsesSystemBinary(t *testing.T) {
+	if hdiutilPath != "/usr/bin/hdiutil" {
+		t.Fatalf("hdiutilPath=%q want /usr/bin/hdiutil", hdiutilPath)
+	}
+}
+
+func TestFolderBackendEnvDoesNotSetPath(t *testing.T) {
+	if got := folderBackendEnv(); !reflect.DeepEqual(got, []string{"LANG=C"}) {
+		t.Fatalf("folderBackendEnv()=%q want LANG only", got)
+	}
+}
 
 func TestHdiutilFolderBackendRejectsSymlinkedImagePath(t *testing.T) {
 	dataDir := t.TempDir()
@@ -213,6 +226,51 @@ func TestParseHdiutilInfoMountedRequiresExactMountpoint(t *testing.T) {
 	info := []byte("/dev/disk4s1\tApple_APFS\t/private/tmp/project/private-other\n")
 	if parseHdiutilInfoMounted(info, "/private/tmp/project/private") {
 		t.Fatal("substring mountpoint was reported as mounted")
+	}
+}
+
+func TestParseHdiutilInfoPlistMountedAcceptsExactMountpoint(t *testing.T) {
+	info := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>images</key>
+  <array>
+    <dict>
+      <key>system-entities</key>
+      <array>
+        <dict>
+          <key>mount-point</key>
+          <string>/private/tmp/project/private</string>
+        </dict>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>`)
+	mounted, err := parseHdiutilInfoPlistMounted(info, "/private/tmp/project/private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mounted {
+		t.Fatal("exact plist mountpoint was not reported as mounted")
+	}
+}
+
+func TestParseHdiutilInfoPlistMountedRejectsDifferentMountpoint(t *testing.T) {
+	info := []byte(`<plist><dict><key>mount-point</key><string>/private/tmp/project/private-other</string></dict></plist>`)
+	mounted, err := parseHdiutilInfoPlistMounted(info, "/private/tmp/project/private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mounted {
+		t.Fatal("different plist mountpoint was reported as mounted")
+	}
+}
+
+func TestParseHdiutilInfoPlistMountedRejectsMalformedPlist(t *testing.T) {
+	_, err := parseHdiutilInfoPlistMounted([]byte(`<plist><dict>`), "/private/tmp/project/private")
+	if err == nil {
+		t.Fatal("expected malformed plist error")
 	}
 }
 

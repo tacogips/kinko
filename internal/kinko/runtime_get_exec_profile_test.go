@@ -28,10 +28,10 @@ func TestNormalizeShell(t *testing.T) {
 }
 
 func TestMaskValue(t *testing.T) {
-	if got := maskValue("abcd"); got != "****" {
+	if got := maskValue("abcd"); got != "********" {
 		t.Fatalf("mask short=%q", got)
 	}
-	if got := maskValue("abcdefgh"); got != "ab****gh" {
+	if got := maskValue("abcdefgh"); got != "********" {
 		t.Fatalf("mask long=%q", got)
 	}
 }

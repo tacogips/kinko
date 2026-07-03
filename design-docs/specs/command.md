@@ -59,8 +59,13 @@ Examples:
 
 ```bash
 kinko unlock
-kinko unlock --timeout 15m
+kinko unlock --timeout 9h
 ```
+
+Behavior:
+- Default unlock timeout is `9h`.
+- `--timeout` is the supported timeout override. Encrypted config does not
+  currently provide an unlock-timeout source.
 
 ### `kinko password change`
 
@@ -97,6 +102,17 @@ Exit codes:
 
 Show lock state, active timeout, data dir, and current path/profile resolution.
 
+### `kinko explosion`
+
+Permanently remove kinko vault persistence after password re-entry and explicit
+confirmation.
+
+Folder-vault interaction:
+- A safe root `folders/` directory is allowed in the data-dir layout.
+- The command refuses to proceed while any registered folder is mounted.
+- Confirmed explosion removes root `folders/` storage together with the core
+  vault files.
+
 ### `kinko folder`
 
 Manage project-scoped encrypted folder vaults.
@@ -127,6 +143,9 @@ Behavior:
 - The command fails if the mountpoint already exists as a non-directory.
 - The command creates encrypted folder metadata in the encrypted config payload.
 - The command creates backend storage under the kinko data directory.
+- On macOS, backend storage is an encrypted sparsebundle created with a
+  current fixed default capacity of `1g`; a user-selectable `--size` flag is
+  future work.
 - The command adds `<name>/` to `.gitignore` in the resolved path when absent.
 - Commented `.gitignore` rules and negated rules do not count as active
   protection for the folder mountpoint.
@@ -134,6 +153,9 @@ Behavior:
 - If encrypted registration persistence fails after `.gitignore` is updated,
   the previous `.gitignore` state is restored.
 - The command does not mount the folder.
+- The registration and derived folder secret are bound to the resolved
+  profile/path/name. Moving or renaming the project directory requires a future
+  reattach/move workflow.
 
 Output:
 
@@ -163,6 +185,9 @@ Behavior:
 - Fails if the folder has not been registered.
 - Fails rather than mounting over unrelated content.
 - Refuses to take ownership of an already-mounted folder.
+- Serializes the status check and mount transition with a folder-scoped
+  lifecycle lock, but does not hold that lock for the full foreground mount
+  lifetime.
 - Waits in the foreground after mounting and soft-unmounts when the command
   exits, including interrupt or terminate.
 - A later `kinko lock` while this command is running does not force-unmount the
@@ -194,11 +219,42 @@ Behavior:
   metadata. If `kinko lock` was already run while a foreground `folder unlock`
   owner is active, exit or interrupt that owner process to trigger cleanup.
 - Does not force detach busy filesystems.
+- Serializes status-changing lock/unmount work with a folder-scoped lifecycle
+  lock.
 - If the backend reports busy, the command fails with guidance and leaves the
   mount intact so the user can close files and retry `kinko folder lock <name>`.
 - Does not infer ownership of an existing mountpoint directory. Directory
   cleanup is performed by the foreground `folder unlock` owner only when that
   command created the mountpoint for its own mount lifecycle.
+
+#### `kinko folder remove <name>`
+
+Remove a folder registration from encrypted config and delete its encrypted
+backend storage by default.
+
+Examples:
+
+```bash
+kinko folder remove private
+kinko folder remove private --yes
+kinko folder remove private --keep-storage
+```
+
+Behavior:
+- Requires an unlocked kinko session.
+- Refuses to remove a folder while the backend reports it as mounted.
+- Removes the encrypted folder registration from config.
+- Deletes encrypted storage under the kinko data directory unless
+  `--keep-storage` is set.
+- Prompts before deleting encrypted storage unless `--yes` is set.
+- Serializes removal with folder unlock/lock status-changing operations through
+  the folder-scoped lifecycle lock.
+
+Output:
+
+```text
+folder removed: private
+```
 
 #### `kinko folder status [name]`
 
@@ -247,7 +303,14 @@ Behavior:
 - Does not require an active unlocked session; it authenticates directly against persisted vault metadata.
 - Creates the destination directory if needed.
 - Includes all regular persisted files under the kinko data directory, not only a fixed allowlist of known vault files.
+- Excludes root `folders/` encrypted folder-vault storage. Folder vault backup
+  is intentionally out of scope until a streaming/ZIP64 folder backup design
+  exists.
 - Produces a ZIP archive that standard PKZIP-compatible readers can open with the current vault password.
+- Uses traditional PKZIP-compatible password protection for interoperability;
+  treat the backup password as an access-control convenience, not the primary
+  confidentiality boundary. The encrypted vault/config blobs remain the primary
+  cryptographic boundary.
 - Refuses to embed transient unlock state such as `lock/session.token`.
 - Rejects symlinks and other non-regular filesystem entries in the backup source tree, including a symlinked bootstrap config path.
 - Refuses destination directories inside the kinko data directory, including destinations that only resolve inside it through symlinks.
@@ -279,6 +342,10 @@ Shared scope:
 ### `kinko set-key <key> --value <value>`
 
 Set one key at a time using explicit value input (`--value` or stdin).
+
+Value normalization:
+- `--value` preserves the provided argument exactly.
+- stdin value mode reads one line and trims surrounding whitespace.
 
 Shared scope:
 - `--shared` writes the key to vault-wide shared scope.
@@ -477,11 +544,11 @@ Supported shell names:
 Examples:
 
 ```bash
-eval "$(kinko export bash --profile default --path .)"
-eval "$(kinko export zsh --path .)"
-kinko export fish --path . | source
-kinko export nu --path .
-kinko export bash --exclude API_KEY,DB_URL
+eval "$(kinko export bash --profile default --path . --force --confirm=false)"
+eval "$(kinko export zsh --path . --force --confirm=false)"
+kinko export fish --path . --force --confirm=false | source
+kinko export nu --path . --force --confirm=false
+kinko export bash --exclude API_KEY,DB_URL --force --confirm=false
 ```
 
 Export-specific flags:
@@ -546,6 +613,11 @@ Input:
 - if stdin is TTY and `--file` is omitted, import fails with usage error
 - when stdin pipe is used and interactive confirmation is enabled, prompt input must be read from `/dev/tty`
 - if `/dev/tty` is unavailable in piped mode, import must fail with guidance to use `--yes`
+- Posix-like parsers deliberately do not expand `$VAR` inside double-quoted
+  input. This is safer than shell evaluation and keeps import parsing
+  deterministic.
+- Quoted shell values preserve leading and trailing whitespace inside the
+  quotes. Parser whitespace around syntax tokens is ignored.
 
 Confirmation and safety:
 - Import confirmation is required by default.
@@ -598,19 +670,14 @@ kinko exec --profile dev --path . -- go test ./...
 
 Manage profiles.
 
-Subcommands:
+Implemented subcommands:
 - `kinko profile list`
-- `kinko profile create <name>`
-- `kinko profile delete <name>`
-- `kinko profile rename <old> <new>`
 
 ### `kinko path`
 
 Manage path-scoped mappings and inspect path resolution.
 
-Subcommands:
-- `kinko path list`
-- `kinko path show --path <dir>`
+Implemented subcommands:
 - `kinko path prune-missing`
 
 ### `kinko path prune-missing`
@@ -654,47 +721,63 @@ Filesystem matching:
 - Existing files, broken symlinks, permission-denied paths, relative stored paths, and path normalization collisions are not pruned automatically; they are reported as skipped diagnostics.
 - Symlinks are evaluated by their directory existence result after resolution. A symlink that resolves to an existing directory is not stale.
 
-### `kinko tui`
-
-Start terminal UI for cross-cutting browse/search across profile/path/keys/metadata.
-Values are hidden by default and reveal requires explicit action.
-TUI supports encrypted config editing.
-
 ### `kinko config`
 
 Read or edit encrypted configuration.
 
-Subcommands:
+Implemented subcommands:
 - `kinko config show`
 - `kinko config set <key> <value>`
+
+### Planned Commands
+
+These commands are design ideas and are not shipped behavior yet:
+- `kinko tui`
 - `kinko config path`
 - `kinko config edit`
 - `kinko config export --format toml|json`
-
-
-
-Subcommands:
+- `kinko profile create <name>`
+- `kinko profile delete <name>`
+- `kinko profile rename <old> <new>`
+- `kinko path list`
+- `kinko path show --path <dir>`
 
 ### `kinko doctor`
 
 Run local diagnostics: permissions, lock-state health, config validity, vault integrity.
 
-## Global Flags
+Current diagnostics include:
+- Warn when `meta.v1.json` has no `session_key_source`, which identifies
+  pre-migration session metadata. Users should unlock once with a current
+  release, rotate the vault password, and treat old `meta.v1.json` backups as
+  sensitive.
+
+## Persistent Flags
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--profile` | string | `default` | Profile name |
 | `--path` | string | current directory | Logical path scope for key lookup |
-| `--kinko-dir` | string | `~/.local/kinko` | Data directory |
+| `--kinko-dir` | string | `KINKO_DATA_DIR`, bootstrap `kinko_dir`, or `~/.local/kinko` | Data directory |
 | `--config` | string | `~/.config/kinko/bootstrap.toml` | Bootstrap config path |
-| `--json` | bool | `false` | JSON output where supported |
-| `--no-color` | bool | `false` | Disable ANSI output |
-| `--verbose` | bool | `false` | Verbose diagnostic logs (never print secret values) |
-| `--timeout` | duration | command-specific | Unlock session duration |
-| `--reveal` | bool | `false` | Show plaintext values for `get`/`show` |
-| `--shell` | string | command-specific | Explicit shell renderer selection where applicable |
+| `--keychain-preflight` | enum | `required` | Keychain preflight mode: `required`, `best-effort`, or `off` |
 | `--force` | bool | `false` | Override non-TTY / redirection guardrails |
 | `--confirm` | bool | `true` | Require confirmation on sensitive TTY output |
+
+## Command-Local Flags
+
+| Command | Flags |
+|---------|-------|
+| `unlock` | `--timeout` |
+| `get`, `show` | `--reveal` |
+| `show` | `--all-scopes` |
+| `path prune-missing` | `--all-profiles`, `--yes`/`-y`, `--json` |
+| `backup` | `--dest-path`, `--current-stdin`, `--current-fd`, `--force-tty` |
+| `export`, `direnv export` | optional shell argument, `--shared-only`, `--with-scope-comments`, `--exclude` |
+| `import` | optional shell argument, `--file`, `--yes`/`-y`, `--confirm-with-values`, `--allow-shared` |
+| `exec` | `--all`, `--env` |
+| `password change` | `--current-stdin`, `--new-stdin`, `--current-fd`, `--new-fd`, `--force-tty` |
+| `folder remove` | `--keep-storage`, `--yes`/`-y` |
 
 ### Environment Variables
 
@@ -704,8 +787,7 @@ Run local diagnostics: permissions, lock-state health, config validity, vault in
 | `KINKO_PATH` | No | current directory | Default path override |
 | `KINKO_DATA_DIR` | No | `~/.local/kinko` | Data directory override |
 | `KINKO_CONFIG` | No | `~/.config/kinko/bootstrap.toml` | Bootstrap config override |
-| `KINKO_UNLOCK_TIMEOUT` | No | `15m` | Auto-lock timeout fallback |
-| `KINKO_ASKPASS` | No | unset | External passphrase command helper |
+| `KINKO_KEYCHAIN_PREFLIGHT` | No | `required` | Keychain preflight mode override |
 
 ## Integration Use Cases
 
@@ -741,7 +823,42 @@ Operational notes:
 | 14 | Metadata/KDF validation failure (command-specific `cliError`) |
 
 Implementation note:
-- `ExitCode(err)` currently returns `1` for non-`cliError` failures.
-- Commands that require specialized exit semantics must wrap errors with `cliError`.
+- `ExitCode(err)` returns child process exit status for `kinko exec` when the
+  child command exits non-zero.
+- Non-`cliError` command failures otherwise map to `1`.
+- Commands that require specialized exit semantics must wrap errors with
+  `cliError`.
+
+Current command-specific structured mappings:
+
+| Command | Condition | Exit code |
+|---------|-----------|-----------|
+| `password change` | Current password authentication failure | `10` |
+| `password change` | New password policy failure | `11` |
+| `password change` | Mutation lock conflict | `12` |
+| `password change` | Persistence / I/O failure | `13` |
+| `password change` | Metadata/KDF validation failure | `14` |
+| `unlock` | Current password authentication failure | `10` |
+| `unlock` | Invalid arguments / timeout policy failure | `11` |
+| `unlock` | Session/keychain persistence / I/O failure | `13` |
+| `backup` | Current password authentication failure | `10` |
+| `backup` | Mutation lock conflict | `12` |
+| `backup` | Invalid destination policy | `11` |
+| `backup` | Persistence / I/O failure | `13` |
+| `export` | Invalid shell / exclude / sensitive-output policy failure | `11` |
+| `export` | Session/vault/output I/O failure | `13` |
+| `import` | Invalid shell / input / confirmation policy failure | `11` |
+| `import` | Mutation lock conflict | `12` |
+| `import` | File/vault/session persistence / I/O failure | `13` |
+| `delete --all` | Current password authentication failure | `10` |
+| `delete` / `delete --all` | Mutation lock conflict | `12` |
+| `delete` / `delete --all` | Persistence / I/O failure | `13` |
+| `folder add/unlock/lock/remove/status/path` | Validation / state policy failure | `11` |
+| `folder add/unlock/lock/remove/status/path` | Mutation or lifecycle lock conflict | `12` |
+| `folder add/unlock/lock/remove/status/path` | Storage/backend/config I/O failure | `13` |
+| `exec` | Child process exits non-zero | Child exit code |
+
+No additional command-specific structured mappings are currently planned for
+this P4 pass.
 
 ---

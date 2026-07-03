@@ -4,10 +4,63 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRuntimeRootCommandSurface(t *testing.T) {
+	ctx := &runtimeContext{
+		stdin:   strings.NewReader(""),
+		stdout:  &bytes.Buffer{},
+		stderr:  &bytes.Buffer{},
+		rawArgs: nil,
+	}
+	root, err := newRuntimeRootCommand(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, cmd := range root.Commands() {
+		if cmd.Hidden {
+			continue
+		}
+		got = append(got, cmd.Name())
+	}
+	sort.Strings(got)
+	want := []string{
+		cmdBackup,
+		cmdConfig,
+		cmdCopy,
+		cmdDelete,
+		cmdDirenv,
+		cmdDoctor,
+		cmdExec,
+		cmdExplosion,
+		cmdExport,
+		cmdFolder,
+		cmdGet,
+		cmdImport,
+		cmdInit,
+		cmdLock,
+		cmdMove,
+		cmdPassword,
+		cmdPath,
+		cmdProfile,
+		cmdSet,
+		cmdSetKey,
+		cmdShow,
+		cmdStatus,
+		cmdUnlock,
+		cmdVersion,
+	}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("root commands=%v want %v", got, want)
+	}
+}
 
 func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 	withFakeSessionStore(t)
@@ -51,6 +104,24 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 
 		if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "lock"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 			t.Fatalf("lock failed: %v", err)
+		}
+	})
+
+	t.Run("status resolves data dir from bootstrap", func(t *testing.T) {
+		dataDir := t.TempDir()
+		configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
+
+		initIn := strings.NewReader("pw123456\npw123456\n")
+		if err := Run([]string{"--kinko-dir", dataDir, "--config", configPath, "init"}, initIn, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		var statusOut bytes.Buffer
+		if err := Run([]string{"--config", configPath, "status"}, strings.NewReader(""), &statusOut, &bytes.Buffer{}); err != nil {
+			t.Fatalf("status failed: %v", err)
+		}
+		if !strings.Contains(statusOut.String(), "locked") {
+			t.Fatalf("unexpected status output: %q", statusOut.String())
 		}
 	})
 
@@ -223,6 +294,44 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("backup accepts positional destination", func(t *testing.T) {
+		opts := setupBackupFixture(t)
+		destDir := filepath.Join(t.TempDir(), "positional-dest")
+		base := []string{"--kinko-dir", opts.dataDir, "--config", opts.configPath, "backup", "--current-stdin", destDir}
+
+		var out bytes.Buffer
+		if err := Run(base, strings.NewReader("pw\n"), &out, &bytes.Buffer{}); err != nil {
+			t.Fatalf("backup with positional destination failed: %v", err)
+		}
+		archivePath := strings.TrimSpace(strings.TrimPrefix(out.String(), "backup written: "))
+		if filepath.Dir(archivePath) != destDir {
+			t.Fatalf("backup archive dir=%q want=%q", filepath.Dir(archivePath), destDir)
+		}
+		if _, err := os.Stat(archivePath); err != nil {
+			t.Fatalf("backup archive missing: %v", err)
+		}
+	})
+
+	t.Run("backup rejects mixed destination forms", func(t *testing.T) {
+		err := Run([]string{"backup", "--dest-path", t.TempDir(), t.TempDir()}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+		if err == nil {
+			t.Fatal("expected mixed destination forms to be rejected")
+		}
+		if !strings.Contains(err.Error(), "either as positional argument or --dest-path") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("backup rejects multiple positional destinations", func(t *testing.T) {
+		err := Run([]string{"backup", t.TempDir(), t.TempDir()}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+		if err == nil {
+			t.Fatal("expected multiple positional destinations to be rejected")
+		}
+		if !strings.Contains(err.Error(), "accepts at most 1 arg") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("export import", func(t *testing.T) {
 		opts := setupUnlockedForSet(t)
 		base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
@@ -347,7 +456,7 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected explosion to fail with wrong password")
 		}
-		if !strings.Contains(err.Error(), "password verification failed") {
+		if !strings.Contains(err.Error(), "password is invalid") {
 			t.Fatalf("unexpected explosion error: %v", err)
 		}
 	})
@@ -793,6 +902,29 @@ func TestRun_CobraFolderUnlockHelpHidesCompatibilityHoldFlag(t *testing.T) {
 	}
 	if !strings.Contains(got, "Usage:") || !strings.Contains(got, "unlock NAME") {
 		t.Fatalf("unexpected folder unlock help output: %q", got)
+	}
+}
+
+func TestRun_CobraFolderRemoveWiring(t *testing.T) {
+	withFakeSessionStore(t)
+	fake := withFakeFolderBackend(t)
+	opts := setupUnlockedForSet(t)
+	opts.path = t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
+	base := []string{"--kinko-dir", opts.dataDir, "--config", configPath, "--path", opts.path, "--profile", opts.profile}
+	if err := Run(append(base, "folder", "add", "private"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("folder add failed: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := Run(append(base, "folder", "remove", "private", "--yes"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("folder remove failed: %v", err)
+	}
+	if got := out.String(); got != "folder removed: private\n" {
+		t.Fatalf("unexpected remove output: %q", got)
+	}
+	if _, mounts, _ := fake.counts(); mounts != 0 {
+		t.Fatalf("folder remove must not mount, mounts=%d", mounts)
 	}
 }
 

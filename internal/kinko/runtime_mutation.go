@@ -10,25 +10,43 @@ import (
 )
 
 func runSet(opts globalOptions, args []string, stdin io.Reader, stdout io.Writer) error {
-	shared := false
-	assignments := make([]string, 0, len(args))
+	setOpts, err := parseSetOptions(args)
+	if err != nil {
+		return err
+	}
+	return runSetWithOptions(opts, setOpts, stdin, stdout)
+}
+
+type setOptions struct {
+	shared      bool
+	assignments []string
+}
+
+func parseSetOptions(args []string) (setOptions, error) {
+	setOpts := setOptions{
+		assignments: make([]string, 0, len(args)),
+	}
 	for _, a := range args {
 		if a == "--shared" {
-			shared = true
+			setOpts.shared = true
 			continue
 		}
 		if a == "--value" || strings.HasPrefix(a, "--value=") {
-			return errors.New("set only accepts KEY=VALUE assignments; use set-key for --value mode")
+			return setOptions{}, errors.New("set only accepts KEY=VALUE assignments; use set-key for --value mode")
 		}
 		if strings.HasPrefix(a, "-") {
-			return fmt.Errorf("set: unknown flag %q", a)
+			return setOptions{}, fmt.Errorf("set: unknown flag %q", a)
 		}
-		assignments = append(assignments, a)
+		setOpts.assignments = append(setOpts.assignments, a)
 	}
+	return setOpts, nil
+}
+
+func runSetWithOptions(opts globalOptions, setOpts setOptions, stdin io.Reader, stdout io.Writer) error {
 	keys := []string{}
 	values := map[string]string{}
-	if len(assignments) > 0 {
-		for _, a := range assignments {
+	if len(setOpts.assignments) > 0 {
+		for _, a := range setOpts.assignments {
 			key, val, err := parseSetAssignment(a)
 			if err != nil {
 				return err
@@ -72,14 +90,14 @@ func runSet(opts globalOptions, args []string, stdin io.Reader, stdout io.Writer
 	if vd.Shared == nil {
 		vd.Shared = map[string]string{}
 	}
-	if !shared && vd.Profiles[opts.profile] == nil {
+	if !setOpts.shared && vd.Profiles[opts.profile] == nil {
 		vd.Profiles[opts.profile] = map[string]map[string]string{}
 	}
-	if !shared && vd.Profiles[opts.profile][opts.path] == nil {
+	if !setOpts.shared && vd.Profiles[opts.profile][opts.path] == nil {
 		vd.Profiles[opts.profile][opts.path] = map[string]string{}
 	}
 	for _, k := range keys {
-		if shared {
+		if setOpts.shared {
 			vd.Shared[k] = values[k]
 			continue
 		}
@@ -93,66 +111,74 @@ func runSet(opts globalOptions, args []string, stdin io.Reader, stdout io.Writer
 }
 
 func runSetKey(opts globalOptions, args []string, stdin io.Reader, stdout io.Writer) error {
-	key, value, valueProvided, shared, err := parseSetKeyArgs(args)
+	setKeyOpts, err := parseSetKeyArgs(args)
 	if err != nil {
 		return err
 	}
-	if strings.Contains(key, "=") {
+	return runSetKeyWithOptions(opts, setKeyOpts, stdin, stdout)
+}
+
+type setKeyOptions struct {
+	key           string
+	value         string
+	valueProvided bool
+	shared        bool
+}
+
+func runSetKeyWithOptions(opts globalOptions, setKeyOpts setKeyOptions, stdin io.Reader, stdout io.Writer) error {
+	if strings.Contains(setKeyOpts.key, "=") {
 		return errors.New("set-key expects key only (without '=')")
 	}
-	if err := validateEnvKey(key); err != nil {
+	if err := validateEnvKey(setKeyOpts.key); err != nil {
 		return err
 	}
-	if !valueProvided {
-		v, err := readLine(stdin)
+	if !setKeyOpts.valueProvided {
+		v, err := readTrimmedLine(stdin)
 		if err != nil {
 			return err
 		}
 		if v == "" {
 			return errors.New("set-key requires --value or stdin value")
 		}
-		value = v
+		setKeyOpts.value = v
 	}
-	setArgs := []string{key + "=" + value}
-	if shared {
-		setArgs = append([]string{"--shared"}, setArgs...)
+	setOpts := setOptions{
+		shared:      setKeyOpts.shared,
+		assignments: []string{setKeyOpts.key + "=" + setKeyOpts.value},
 	}
-	return runSet(opts, setArgs, strings.NewReader(""), stdout)
+	return runSetWithOptions(opts, setOpts, strings.NewReader(""), stdout)
 }
 
-func parseSetKeyArgs(args []string) (string, string, bool, bool, error) {
-	key := ""
-	value := ""
-	valueProvided := false
-	shared := false
+func parseSetKeyArgs(args []string) (setKeyOptions, error) {
+	var setKeyOpts setKeyOptions
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--shared":
-			shared = true
+			setKeyOpts.shared = true
 		case a == "--value":
 			if i+1 >= len(args) {
-				return "", "", false, false, errors.New("set-key requires value for --value")
+				return setKeyOptions{}, errors.New("set-key requires value for --value")
 			}
-			value = args[i+1]
-			valueProvided = true
+			setKeyOpts.value = args[i+1]
+			setKeyOpts.valueProvided = true
 			i++
 		case strings.HasPrefix(a, "--value="):
-			value = strings.TrimPrefix(a, "--value=")
-			valueProvided = true
+			setKeyOpts.value = strings.TrimPrefix(a, "--value=")
+			setKeyOpts.valueProvided = true
 		case strings.HasPrefix(a, "-"):
-			return "", "", false, false, fmt.Errorf("set-key: unknown flag %q", a)
+			return setKeyOptions{}, fmt.Errorf("set-key: unknown flag %q", a)
 		default:
-			if key != "" {
-				return "", "", false, false, errors.New("set-key requires a key")
+			if setKeyOpts.key != "" {
+				return setKeyOptions{}, errors.New("set-key requires a key")
 			}
-			key = a
+			setKeyOpts.key = a
 		}
 	}
-	if key == "" {
-		return "", "", false, false, errors.New("set-key requires a key")
+	if setKeyOpts.key == "" {
+		return setKeyOptions{}, errors.New("set-key requires a key")
 	}
-	return key, value, valueProvided, shared, nil
+	return setKeyOpts, nil
 }
 
 type setAssignment struct {
@@ -196,38 +222,58 @@ func parseSetAssignmentsFromReader(r io.Reader) ([]setAssignment, error) {
 }
 
 func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	autoYes := false
-	deleteAll := false
-	shared := false
-	fs.BoolVar(&autoYes, "yes", false, "auto confirm deletion")
-	fs.BoolVar(&autoYes, "y", false, "auto confirm deletion")
-	fs.BoolVar(&deleteAll, "all", false, "delete all keys in resolved profile/path scope")
-	fs.BoolVar(&shared, "shared", false, "delete keys from shared scope")
-	if err := fs.Parse(args); err != nil {
+	deleteOpts, err := parseDeleteOptions(args)
+	if err != nil {
 		return err
 	}
-	if deleteAll && fs.NArg() > 0 {
-		return errors.New("delete --all cannot be combined with a key")
+	return runDeleteWithOptions(opts, deleteOpts, stdin, stdout, stderr)
+}
+
+type deleteOptions struct {
+	key       string
+	autoYes   bool
+	deleteAll bool
+	shared    bool
+}
+
+func parseDeleteOptions(args []string) (deleteOptions, error) {
+	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var deleteOpts deleteOptions
+	fs.BoolVar(&deleteOpts.autoYes, "yes", false, "auto confirm deletion")
+	fs.BoolVar(&deleteOpts.autoYes, "y", false, "auto confirm deletion")
+	fs.BoolVar(&deleteOpts.deleteAll, "all", false, "delete all keys in resolved profile/path scope")
+	fs.BoolVar(&deleteOpts.shared, "shared", false, "delete keys from shared scope")
+	if err := fs.Parse(args); err != nil {
+		return deleteOptions{}, err
 	}
-	if !deleteAll && fs.NArg() != 1 {
-		return errors.New("delete requires a key or --all")
+	if deleteOpts.deleteAll && fs.NArg() > 0 {
+		return deleteOptions{}, errors.New("delete --all cannot be combined with a key")
 	}
+	if !deleteOpts.deleteAll && fs.NArg() != 1 {
+		return deleteOptions{}, errors.New("delete requires a key or --all")
+	}
+	if fs.NArg() == 1 {
+		deleteOpts.key = fs.Arg(0)
+	}
+	return deleteOpts, nil
+}
+
+func runDeleteWithOptions(opts globalOptions, deleteOpts deleteOptions, stdin io.Reader, stdout, stderr io.Writer) error {
 	confirmationInput := stdin
 	var passwordInput passwordVerificationInput
-	if deleteAll {
+	if deleteOpts.deleteAll {
 		passwordInput = passwordVerificationInputFor(stdin, isTerminalReader)
 		confirmationInput = passwordInput.confirmationInput
-		if autoYes {
+		if deleteOpts.autoYes {
 			if err := verifyVaultPasswordForBulkDelete(opts, passwordInput, stderr); err != nil {
-				return err
+				return newCLIError(exitCodeAuthFailed, err.Error(), err)
 			}
 		}
 	}
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
-		return fmt.Errorf("vault mutation in progress: %w", err)
+		return newCLIError(exitCodeLockConflict, "Vault mutation in progress.", err)
 	}
 	defer release()
 	dek, err := loadUnlockedDEK(opts.dataDir)
@@ -236,22 +282,22 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 	}
 	vd, err := loadVault(opts.dataDir, dek)
 	if err != nil {
-		return err
+		return newCLIError(exitCodeIOFailed, "Failed to load vault.", err)
 	}
-	if deleteAll {
+	if deleteOpts.deleteAll {
 		scope := map[string]string{}
-		if shared {
+		if deleteOpts.shared {
 			scope = vd.Shared
 		} else if vd.Profiles[opts.profile] != nil && vd.Profiles[opts.profile][opts.path] != nil {
 			scope = vd.Profiles[opts.profile][opts.path]
 		}
 		if len(scope) == 0 {
-			if shared {
+			if deleteOpts.shared {
 				return errors.New("no secrets found in shared scope")
 			}
 			return errors.New("no secrets found in current profile/path scope")
 		}
-		if !autoYes {
+		if !deleteOpts.autoYes {
 			keys := sortedKeys(scope)
 			if _, err := fmt.Fprintln(stderr, "Delete target keys:"); err != nil {
 				return err
@@ -262,7 +308,7 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 				}
 			}
 			msg := fmt.Sprintf("Delete all %d keys in profile=%q path=%q? [y/N]: ", len(scope), opts.profile, opts.path)
-			if shared {
+			if deleteOpts.shared {
 				msg = fmt.Sprintf("Delete all %d keys in shared scope? [y/N]: ", len(scope))
 			}
 			ok, err := confirmPrompt(confirmationInput, stderr, msg)
@@ -274,25 +320,25 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 				return nil
 			}
 			if err := verifyVaultPasswordForBulkDelete(opts, passwordInput, stderr); err != nil {
-				return err
+				return newCLIError(exitCodeAuthFailed, err.Error(), err)
 			}
 		}
-		if shared {
+		if deleteOpts.shared {
 			vd.Shared = map[string]string{}
 		} else {
 			delete(vd.Profiles[opts.profile], opts.path)
 		}
 		if err := saveVault(opts.dataDir, dek, vd); err != nil {
-			return err
+			return newCLIError(exitCodeIOFailed, "Failed to save vault.", err)
 		}
 		_, _ = fmt.Fprintln(stdout, "deleted all")
 		return nil
 	}
-	key := fs.Arg(0)
+	key := deleteOpts.key
 	if err := validateEnvKey(key); err != nil {
 		return err
 	}
-	if shared {
+	if deleteOpts.shared {
 		if vd.Shared == nil {
 			return errors.New("secret not found")
 		}
@@ -313,7 +359,7 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 			return errors.New("secret not found")
 		}
 	}
-	if !autoYes {
+	if !deleteOpts.autoYes {
 		ok, err := confirmPrompt(stdin, stderr, fmt.Sprintf("Delete key %q? [y/N]: ", key))
 		if err != nil {
 			return err
@@ -323,19 +369,19 @@ func runDelete(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 			return nil
 		}
 	}
-	if shared {
+	if deleteOpts.shared {
 		delete(vd.Shared, key)
 	} else {
 		delete(vd.Profiles[opts.profile][opts.path], key)
 	}
 	if err := saveVault(opts.dataDir, dek, vd); err != nil {
-		return err
+		return newCLIError(exitCodeIOFailed, "Failed to save vault.", err)
 	}
 	_, _ = fmt.Fprintln(stdout, "deleted")
 	return nil
 }
 
-func readLine(r io.Reader) (string, error) {
+func readTrimmedLine(r io.Reader) (string, error) {
 	v, err := bufio.NewReader(r).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err

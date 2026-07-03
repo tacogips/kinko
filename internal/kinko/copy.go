@@ -36,7 +36,14 @@ func runCopy(opts globalOptions, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return runCopyWithOptions(opts, copyOpts, stdout)
+}
 
+func runCopyWithOptions(opts globalOptions, copyOpts copySecretOptions, stdout io.Writer) error {
+	copyOpts, err := validateCopyOptions(copyOpts)
+	if err != nil {
+		return err
+	}
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
 		return fmt.Errorf("vault mutation in progress: %w", err)
@@ -106,6 +113,25 @@ func parseCopyArgs(args []string) (copySecretOptions, error) {
 		return copySecretOptions{}, errors.New("copy requires exactly one key or *")
 	}
 	opts.Key = positionals[1]
+	if opts.Key != "*" {
+		if err := validateEnvKey(opts.Key); err != nil {
+			return copySecretOptions{}, err
+		}
+	}
+	return validateCopyOptions(opts)
+}
+
+func validateCopyOptions(opts copySecretOptions) (copySecretOptions, error) {
+	switch opts.Direction {
+	case copyDirectionLocalToLocal, copyDirectionLocalToShared, copyDirectionSharedToLocal:
+	case "":
+		return copySecretOptions{}, errors.New("copy requires a direction")
+	default:
+		return copySecretOptions{}, fmt.Errorf("copy: unknown direction %q", opts.Direction)
+	}
+	if opts.Key == "" {
+		return copySecretOptions{}, errors.New("copy requires a key or *")
+	}
 	if opts.Key != "*" {
 		if err := validateEnvKey(opts.Key); err != nil {
 			return copySecretOptions{}, err

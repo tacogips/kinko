@@ -21,30 +21,106 @@ var waitForFolderOwnerExit = waitForInterruptOrTerminateSignal
 var saveFolderConfig = saveConfig
 
 func runFolder(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	_ = stdin
-	_ = stderr
 	if len(args) == 0 {
-		return errors.New("folder requires subcommand: add|unlock|lock|status|path")
+		return errors.New("folder requires subcommand: add|unlock|lock|remove|status|path")
 	}
 	switch args[0] {
 	case folderAdd:
-		return runFolderAdd(opts, args[1:], stdout)
+		return folderCommandError(runFolderAdd(opts, args[1:], stdout))
 	case folderUnlock:
-		return runFolderUnlock(opts, args[1:], stdout)
+		return folderCommandError(runFolderUnlock(opts, args[1:], stdout))
 	case folderLock:
-		return runFolderLock(opts, args[1:], stdout)
+		return folderCommandError(runFolderLock(opts, args[1:], stdout))
+	case folderRemove:
+		return folderCommandError(runFolderRemove(opts, args[1:], stdin, stdout, stderr))
 	case folderStatus:
-		return runFolderStatus(opts, args[1:], stdout)
+		return folderCommandError(runFolderStatus(opts, args[1:], stdout))
 	case folderPath:
-		return runFolderPath(opts, args[1:], stdout)
+		return folderCommandError(runFolderPath(opts, args[1:], stdout))
 	default:
-		return fmt.Errorf("unknown folder subcommand %q", args[0])
+		return folderCommandError(fmt.Errorf("unknown folder subcommand %q", args[0]))
 	}
+}
+
+func folderCommandError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var cliErr *cliError
+	if errors.As(err, &cliErr) {
+		return err
+	}
+	return newCLIError(folderErrorExitCode(err), err.Error(), err)
+}
+
+func folderErrorExitCode(err error) int {
+	msg := err.Error()
+	if strings.Contains(msg, "vault mutation in progress") || strings.Contains(msg, "folder lifecycle in progress") {
+		return exitCodeLockConflict
+	}
+	if isFolderPolicyErrorMessage(msg) {
+		return exitCodePolicyFailed
+	}
+	return exitCodeIOFailed
+}
+
+func isFolderPolicyErrorMessage(msg string) bool {
+	policyFragments := []string{
+		"requires",
+		"unknown folder subcommand",
+		"invalid folder",
+		"folder already registered",
+		"folder not registered",
+		"folder already mounted",
+		"folder is mounted",
+		"folder is not mounted",
+		"mountpoint",
+	}
+	for _, fragment := range policyFragments {
+		if strings.Contains(msg, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func runFolderAdd(opts globalOptions, args []string, stdout io.Writer) error {
 	name, err := parseFolderNameArg(folderAdd, args)
 	if err != nil {
+		return err
+	}
+	return runFolderAddWithOptions(opts, folderNameOptions{name: name}, stdout)
+}
+
+type folderNameOptions struct {
+	name string
+}
+
+type folderUnlockOptions struct {
+	name string
+	hold bool
+}
+
+type folderRemoveOptions struct {
+	name        string
+	keepStorage bool
+	yes         bool
+}
+
+type folderStatusOptions struct {
+	name string
+}
+
+func validateFolderOptionName(command string, name string) error {
+	if name == "" {
+		return fmt.Errorf("folder %s requires <name>", command)
+	}
+	return validateFolderName(name)
+}
+
+func runFolderAddWithOptions(opts globalOptions, folderOpts folderNameOptions, stdout io.Writer) error {
+	name := folderOpts.name
+	if err := validateFolderOptionName(folderAdd, name); err != nil {
 		return err
 	}
 	if err := validateProjectPathForFolder(opts.path); err != nil {
@@ -118,13 +194,22 @@ func runFolderAdd(opts globalOptions, args []string, stdout io.Writer) error {
 func runFolderUnlock(opts globalOptions, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("folder unlock", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	hold := false
-	fs.BoolVar(&hold, "hold", false, "accepted for compatibility; unlock already holds the mount in the foreground")
+	var folderOpts folderUnlockOptions
+	fs.BoolVar(&folderOpts.hold, "hold", false, "accepted for compatibility; unlock already holds the mount in the foreground")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	name, err := parseFolderNameArg(folderUnlock, fs.Args())
 	if err != nil {
+		return err
+	}
+	folderOpts.name = name
+	return runFolderUnlockWithOptions(opts, folderOpts, stdout)
+}
+
+func runFolderUnlockWithOptions(opts globalOptions, folderOpts folderUnlockOptions, stdout io.Writer) error {
+	name := folderOpts.name
+	if err := validateFolderOptionName(folderUnlock, name); err != nil {
 		return err
 	}
 	dek, _, records, err := loadFolderConfig(opts)
@@ -135,12 +220,18 @@ func runFolderUnlock(opts globalOptions, args []string, stdout io.Writer) error 
 	if err != nil {
 		return err
 	}
+	release, err := acquireFolderLifecycleLock(opts.dataDir, record)
+	if err != nil {
+		return fmt.Errorf("folder lifecycle in progress: %w", err)
+	}
 	mountpoint := folderMountpoint(record)
 	storageExists, err := folderStorageExists(opts.dataDir, record)
 	if err != nil {
+		release()
 		return err
 	}
 	if !storageExists {
+		release()
 		dir, err := checkedFolderStorageDir(opts.dataDir, record)
 		if err != nil {
 			return err
@@ -150,23 +241,33 @@ func runFolderUnlock(opts globalOptions, args []string, stdout io.Writer) error 
 	backend := newFolderBackend(opts.dataDir)
 	status, err := backend.Status(context.Background(), record, mountpoint)
 	if err != nil {
+		release()
 		return err
 	}
 	if status.Mounted {
+		release()
 		return fmt.Errorf("folder already mounted: %s", record.Name)
 	}
 	created, err := prepareFolderMountpoint(mountpoint)
 	if err != nil {
+		release()
 		return err
 	}
 	secret := deriveFolderSecret(dek, record)
 	if err := backend.Mount(context.Background(), record, secret, mountpoint); err != nil {
+		release()
 		cleanupCreatedMountpoint(mountpoint, created)
 		return err
 	}
+	release()
 	_, _ = fmt.Fprintf(stdout, "folder unlocked: %s\npath: %s\n", record.Name, mountpoint)
 	_, _ = fmt.Fprintf(stdout, "holding folder unlock; send interrupt or terminate to lock: %s\n", record.Name)
 	waitForFolderOwnerExit()
+	release, err = acquireFolderLifecycleLock(opts.dataDir, record)
+	if err != nil {
+		return fmt.Errorf("folder lifecycle in progress: %w", err)
+	}
+	defer release()
 	if err := backend.Unmount(context.Background(), record, mountpoint); err != nil {
 		return folderUnmountError(record.Name, err)
 	}
@@ -180,6 +281,14 @@ func runFolderLock(opts globalOptions, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return runFolderLockWithOptions(opts, folderNameOptions{name: name}, stdout)
+}
+
+func runFolderLockWithOptions(opts globalOptions, folderOpts folderNameOptions, stdout io.Writer) error {
+	name := folderOpts.name
+	if err := validateFolderOptionName(folderLock, name); err != nil {
+		return err
+	}
 	_, _, records, err := loadFolderConfig(opts)
 	if err != nil {
 		return err
@@ -188,6 +297,11 @@ func runFolderLock(opts globalOptions, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	release, err := acquireFolderLifecycleLock(opts.dataDir, record)
+	if err != nil {
+		return fmt.Errorf("folder lifecycle in progress: %w", err)
+	}
+	defer release()
 	backend := newFolderBackend(opts.dataDir)
 	mountpoint := folderMountpoint(record)
 	status, err := backend.Status(context.Background(), record, mountpoint)
@@ -203,6 +317,78 @@ func runFolderLock(opts globalOptions, args []string, stdout io.Writer) error {
 	return nil
 }
 
+func runFolderRemove(opts globalOptions, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("folder remove", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var folderOpts folderRemoveOptions
+	fs.BoolVar(&folderOpts.keepStorage, "keep-storage", false, "remove folder registration without deleting encrypted folder storage")
+	fs.BoolVar(&folderOpts.yes, "yes", false, "delete encrypted folder storage without prompting")
+	fs.BoolVar(&folderOpts.yes, "y", false, "delete encrypted folder storage without prompting")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	name, err := parseFolderNameArg(folderRemove, fs.Args())
+	if err != nil {
+		return err
+	}
+	folderOpts.name = name
+	return runFolderRemoveWithOptions(opts, folderOpts, stdin, stdout, stderr)
+}
+
+func runFolderRemoveWithOptions(opts globalOptions, folderOpts folderRemoveOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	name := folderOpts.name
+	if err := validateFolderOptionName(folderRemove, name); err != nil {
+		return err
+	}
+	dek, cfg, records, err := loadFolderConfig(opts)
+	if err != nil {
+		return err
+	}
+	record, err := requireFolderRecord(records, opts, name)
+	if err != nil {
+		return err
+	}
+	release, err := acquireFolderLifecycleLock(opts.dataDir, record)
+	if err != nil {
+		return fmt.Errorf("folder lifecycle in progress: %w", err)
+	}
+	defer release()
+
+	backend := newFolderBackend(opts.dataDir)
+	status, err := backend.Status(context.Background(), record, folderMountpoint(record))
+	if err != nil {
+		return err
+	}
+	if status.Mounted {
+		return fmt.Errorf("folder is mounted: %s", record.Name)
+	}
+	if !folderOpts.keepStorage && !folderOpts.yes {
+		ok, err := confirmPrompt(stdin, stderr, fmt.Sprintf("Remove folder %q and delete encrypted storage? [y/N]: ", record.Name))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			_, _ = fmt.Fprintln(stdout, "aborted")
+			return nil
+		}
+	}
+
+	if !folderOpts.keepStorage {
+		if err := removeFolderStorage(opts.dataDir, record); err != nil {
+			return err
+		}
+	}
+	next := removeFolderRecord(records, record)
+	if err := saveFolderRecordsToConfig(cfg, next); err != nil {
+		return err
+	}
+	if err := saveFolderConfig(opts.dataDir, dek, cfg); err != nil {
+		return fmt.Errorf("write encrypted folder config: %w", err)
+	}
+	_, _ = fmt.Fprintf(stdout, "folder removed: %s\n", record.Name)
+	return nil
+}
+
 func runFolderStatus(opts globalOptions, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("folder status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -212,12 +398,20 @@ func runFolderStatus(opts globalOptions, args []string, stdout io.Writer) error 
 	if fs.NArg() > 1 {
 		return errors.New("folder status accepts at most one folder name")
 	}
+	folderOpts := folderStatusOptions{}
+	if fs.NArg() == 1 {
+		folderOpts.name = fs.Arg(0)
+	}
+	return runFolderStatusWithOptions(opts, folderOpts, stdout)
+}
+
+func runFolderStatusWithOptions(opts globalOptions, folderOpts folderStatusOptions, stdout io.Writer) error {
 	_, _, records, err := loadFolderConfig(opts)
 	if err != nil {
 		return err
 	}
-	if fs.NArg() == 1 {
-		name := fs.Arg(0)
+	if folderOpts.name != "" {
+		name := folderOpts.name
 		if err := validateFolderName(name); err != nil {
 			return err
 		}
@@ -244,6 +438,14 @@ func runFolderStatus(opts globalOptions, args []string, stdout io.Writer) error 
 func runFolderPath(opts globalOptions, args []string, stdout io.Writer) error {
 	name, err := parseFolderNameArg(folderPath, args)
 	if err != nil {
+		return err
+	}
+	return runFolderPathWithOptions(opts, folderNameOptions{name: name}, stdout)
+}
+
+func runFolderPathWithOptions(opts globalOptions, folderOpts folderNameOptions, stdout io.Writer) error {
+	name := folderOpts.name
+	if err := validateFolderOptionName(folderPath, name); err != nil {
 		return err
 	}
 	_, _, records, err := loadFolderConfig(opts)
@@ -274,6 +476,17 @@ func parseFolderNameArg(command string, args []string) (string, error) {
 		return "", err
 	}
 	return args[0], nil
+}
+
+func removeFolderRecord(records []FolderRecord, target FolderRecord) []FolderRecord {
+	next := make([]FolderRecord, 0, len(records))
+	for _, record := range records {
+		if record.Profile == target.Profile && filepath.Clean(record.Path) == filepath.Clean(target.Path) && record.Name == target.Name {
+			continue
+		}
+		next = append(next, record)
+	}
+	return next
 }
 
 func loadFolderConfig(opts globalOptions) ([]byte, map[string]string, []FolderRecord, error) {
@@ -464,6 +677,43 @@ func cleanupFolderStorage(dataDir string, record FolderRecord) {
 		return
 	}
 	_ = os.RemoveAll(dir)
+}
+
+func removeFolderStorage(dataDir string, record FolderRecord) error {
+	if ok, err := folderStorageRootExists(dataDir); err != nil {
+		return err
+	} else if !ok {
+		return nil
+	}
+	dir, err := checkedFolderStorageDir(dataDir, record)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat folder storage: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("folder storage path must not be a symlink: %s", dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("folder storage path exists and is not a directory: %s", dir)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove folder storage: %w", err)
+	}
+	return nil
+}
+
+func acquireFolderLifecycleLock(dataDir string, record FolderRecord) (func(), error) {
+	if err := validateFolderStorageID(record.FolderID); err != nil {
+		return nil, err
+	}
+	lockPath := filepath.Join(dataDir, "lock", "folder-"+record.FolderID+".lifecycle.lock")
+	return acquireMetadataLock(lockPath)
 }
 
 func prepareFolderMountpoint(mountpoint string) (bool, error) {

@@ -55,6 +55,65 @@ func TestRunExplosion_DoubleConfirmAndWipe(t *testing.T) {
 	}
 }
 
+func TestRunExplosion_RemovesFolderStorage(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	folderFile := filepath.Join(dataDir, "folders", "folder-id", "meta.json")
+	if err := os.MkdirAll(filepath.Dir(folderFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(folderFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := globalOptions{dataDir: dataDir, configPath: filepath.Join(t.TempDir(), "bootstrap.toml")}
+	token := explosionConfirmationToken(dataDir)
+	in := bytes.NewBufferString("pw\ny\n" + token + "\n")
+	if err := runExplosion(opts, in, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(dataDir, "folders")) {
+		t.Fatal("expected folder storage root to be removed")
+	}
+}
+
+func TestRunExplosion_RefusesMountedFolder(t *testing.T) {
+	fake := withFakeFolderBackend(t)
+	opts := setupUnlockedFolderTest(t)
+	if err := runFolder(opts, []string{folderAdd, "private"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("folder add failed: %v", err)
+	}
+	_, _, records, err := loadFolderConfig(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := requireFolderRecord(records, opts, "private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.mounted[folderMountpoint(record)] = true
+	fake.mu.Unlock()
+
+	token := explosionConfirmationToken(opts.dataDir)
+	in := bytes.NewBufferString("pw\ny\n" + token + "\n")
+	err = runExplosion(opts, in, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected mounted folder refusal")
+	}
+	if !strings.Contains(err.Error(), "folder is mounted: private") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fileExists(filepath.Join(opts.dataDir, "vault", "meta.v1.json")) {
+		t.Fatal("data should remain when mounted folder blocks explosion")
+	}
+}
+
 func TestRunExplosion_Abort(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := ensureDirLayout(dataDir); err != nil {

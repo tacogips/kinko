@@ -39,4 +39,4 @@ jobs:
         run: go vet ./...
 
       - name: Build
-        run: go build -ldflags "-s -w -X githus.com/tacogips/kinko/internal/build.version=$(cat internal/build/VERSION)" -o kinko ./cmd/kinko
+        run: go build -ldflags "-s -w -X github.com/tacogips/kinko/internal/build.version=$(cat internal/build/VERSION)" -o kinko ./cmd/kinko

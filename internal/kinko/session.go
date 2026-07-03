@@ -70,7 +70,7 @@ func unlockSession(dataDir string, timeout time.Duration, secret string) error {
 	if err != nil {
 		return fmt.Errorf("prepare session wrap key: %w", err)
 	}
-	encDEK, err := encryptBlob(wrapKey, dek)
+	encDEK, err := encryptBlobWithAAD(wrapKey, dek, []byte(aeadContextSessionDEK))
 	if err != nil {
 		return fmt.Errorf("encrypt session dek: %w", err)
 	}
@@ -98,7 +98,7 @@ func unlockSession(dataDir string, timeout time.Duration, secret string) error {
 	if err != nil {
 		return err
 	}
-	return write0600(filepath.Join(dataDir, "lock", "session.token"), b)
+	return write0600Atomically(filepath.Join(dataDir, "lock", "session.token"), b)
 }
 
 func lockSession(dataDir string) error {
@@ -181,7 +181,7 @@ func verifyAndLoadSessionDEK(dataDir string, meta *vaultMeta) ([]byte, time.Time
 	if err != nil {
 		return nil, time.Time{}, errors.New("locked")
 	}
-	dek, err := decryptBlob(wrapKey, payload.EncDEK)
+	dek, err := decryptBlobWithAAD(wrapKey, payload.EncDEK, []byte(aeadContextSessionDEK))
 	if err != nil {
 		return nil, time.Time{}, errors.New("locked")
 	}
@@ -238,6 +238,10 @@ func deleteSessionWrapKey(dataDir string) error {
 		}
 		return fmt.Errorf("load meta for session wrap key cleanup: %w", err)
 	}
+	return deleteSessionWrapKeyForMeta(dataDir, meta)
+}
+
+func deleteSessionWrapKeyForMeta(dataDir string, meta *vaultMeta) error {
 	account := sessionWrapKeyAccount(dataDir, meta)
 	delErr := sessionSecretStore.Delete(sessionWrapKeyService, account)
 	if delErr != nil && !errors.Is(delErr, keyring.ErrNotFound) {

@@ -5,7 +5,6 @@ import (
 	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -37,6 +36,14 @@ const (
 	sessionKeyRandom  = "random"
 )
 
+const (
+	aeadContextWrappedDEKPass = "kinko.wrapped_dek_pass.v1"
+	aeadContextSessionPriv    = "kinko.session_priv_key.v1"
+	aeadContextVaultData      = "kinko.vault_data.v1"
+	aeadContextConfig         = "kinko.config.v1"
+	aeadContextSessionDEK     = "kinko.session_dek.v1"
+)
+
 type vaultMeta struct {
 	Version           int        `json:"version"`
 	SaltPasswordB64   string     `json:"salt_password_b64"`
@@ -64,6 +71,7 @@ type vaultData struct {
 type encryptedBlob struct {
 	NonceB64      string `json:"nonce_b64"`
 	CiphertextB64 string `json:"ciphertext_b64"`
+	AADB64        string `json:"aad_b64,omitempty"`
 }
 
 type keyResolver func([]byte) ([]byte, error)
@@ -81,7 +89,7 @@ func initVault(dataDir string, password string) error {
 
 	kdf := defaultPasswordKDFParams()
 	kekPass := deriveKEK(password, saltPass, kdf)
-	wrappedPass, err := encryptBlob(kekPass, dek)
+	wrappedPass, err := encryptBlobWithAAD(kekPass, dek, []byte(aeadContextWrappedDEKPass))
 	if err != nil {
 		return err
 	}
@@ -100,7 +108,7 @@ func initVault(dataDir string, password string) error {
 		KDFParamsPassword: kdf,
 		UpdatedAt:         time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := saveMeta(dataDir, &meta); err != nil {
+	if err := saveMetaAtomically(dataDir, &meta); err != nil {
 		return err
 	}
 
@@ -111,7 +119,7 @@ func initVault(dataDir string, password string) error {
 	if err := saveVault(dataDir, dek, vd); err != nil {
 		return err
 	}
-	if err := saveConfig(dataDir, dek, map[string]string{"unlock_timeout": "9h"}); err != nil {
+	if err := saveConfig(dataDir, dek, map[string]string{}); err != nil {
 		return err
 	}
 	if err := write0600(filepath.Join(dataDir, "vault", vaultMarker), []byte("kinko-vault-v1\n")); err != nil {
@@ -163,7 +171,7 @@ func saveVault(dataDir string, dek []byte, data *vaultData) error {
 	if err != nil {
 		return err
 	}
-	blob, err := encryptBlob(dek, plain)
+	blob, err := encryptBlobWithAAD(dek, plain, []byte(aeadContextVaultData))
 	if err != nil {
 		return err
 	}
@@ -175,7 +183,7 @@ func loadVault(dataDir string, dek []byte) (*vaultData, error) {
 	if err != nil {
 		return nil, err
 	}
-	plain, err := decryptBlob(dek, string(b))
+	plain, err := decryptBlobWithAAD(dek, string(b), []byte(aeadContextVaultData))
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +205,7 @@ func saveConfig(dataDir string, dek []byte, cfg map[string]string) error {
 	if err != nil {
 		return err
 	}
-	blob, err := encryptBlob(dek, plain)
+	blob, err := encryptBlobWithAAD(dek, plain, []byte(aeadContextConfig))
 	if err != nil {
 		return err
 	}
@@ -209,7 +217,7 @@ func loadConfig(dataDir string, dek []byte) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	plain, err := decryptBlob(dek, string(b))
+	plain, err := decryptBlobWithAAD(dek, string(b), []byte(aeadContextConfig))
 	if err != nil {
 		return nil, err
 	}
@@ -233,11 +241,11 @@ func unwrapDEKWithPassword(meta *vaultMeta, password string) ([]byte, error) {
 		return nil, errMetadataInvalid
 	}
 	kek := deriveKEK(password, salt, kdf)
-	return decryptBlob(kek, meta.WrappedDEKPassB64)
+	return decryptBlobWithAAD(kek, meta.WrappedDEKPassB64, []byte(aeadContextWrappedDEKPass))
 }
 
 func sessionPrivateKey(meta *vaultMeta, dek []byte) (ed25519.PrivateKey, error) {
-	plain, err := decryptBlob(dek, meta.EncSessionPrivB64)
+	plain, err := decryptBlobWithAAD(dek, meta.EncSessionPrivB64, []byte(aeadContextSessionPriv))
 	if err != nil {
 		return nil, err
 	}
@@ -262,13 +270,6 @@ func deriveKEK(secret string, salt []byte, params *kdfParams) []byte {
 	return argon2.IDKey([]byte(secret), salt, params.Time, params.Memory, params.Threads, params.KeyLen)
 }
 
-func deriveSessionKeyPairFromPassword(password string) (ed25519.PublicKey, ed25519.PrivateKey) {
-	seed := sha256.Sum256([]byte("kinko.session.seed.v1:password:" + strings.TrimSpace(password)))
-	priv := ed25519.NewKeyFromSeed(seed[:])
-	pub := priv.Public().(ed25519.PublicKey)
-	return pub, priv
-}
-
 func generateRandomSessionKeyPair() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -282,7 +283,7 @@ func newRandomSessionKeyMaterial(dek []byte) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	encPriv, err := encryptBlob(dek, priv)
+	encPriv, err := encryptBlobWithAAD(dek, priv, []byte(aeadContextSessionPriv))
 	if err != nil {
 		return "", "", err
 	}
@@ -317,10 +318,18 @@ func migrateLegacySessionKey(dataDir string, meta *vaultMeta, dek []byte) (*vaul
 }
 
 func encryptBlob(key, plain []byte) (string, error) {
-	return encryptBlobWithResolver(key, plain, resolveAEADKey)
+	return encryptBlobWithResolverAndAAD(key, plain, nil, resolveAEADKey)
 }
 
 func encryptBlobWithResolver(key, plain []byte, resolver keyResolver) (string, error) {
+	return encryptBlobWithResolverAndAAD(key, plain, nil, resolver)
+}
+
+func encryptBlobWithAAD(key, plain []byte, aad []byte) (string, error) {
+	return encryptBlobWithResolverAndAAD(key, plain, aad, resolveAEADKey)
+}
+
+func encryptBlobWithResolverAndAAD(key, plain []byte, aad []byte, resolver keyResolver) (string, error) {
 	effectiveKey, err := resolver(key)
 	if err != nil {
 		return "", err
@@ -334,10 +343,13 @@ func encryptBlobWithResolver(key, plain []byte, resolver keyResolver) (string, e
 		return "", err
 	}
 	nonce := mustRandom(aead.NonceSize())
-	ciphertext := aead.Seal(nil, nonce, plain, nil)
+	ciphertext := aead.Seal(nil, nonce, plain, aad)
 	blob := encryptedBlob{
 		NonceB64:      base64.StdEncoding.EncodeToString(nonce),
 		CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
+	}
+	if len(aad) > 0 {
+		blob.AADB64 = base64.StdEncoding.EncodeToString(aad)
 	}
 	b, err := json.Marshal(blob)
 	if err != nil {
@@ -347,10 +359,18 @@ func encryptBlobWithResolver(key, plain []byte, resolver keyResolver) (string, e
 }
 
 func decryptBlob(key []byte, blobJSON string) ([]byte, error) {
-	return decryptBlobWithResolver(key, blobJSON, resolveAEADKey)
+	return decryptBlobWithResolverAndAAD(key, blobJSON, nil, resolveAEADKey)
 }
 
 func decryptBlobWithResolver(key []byte, blobJSON string, resolver keyResolver) ([]byte, error) {
+	return decryptBlobWithResolverAndAAD(key, blobJSON, nil, resolver)
+}
+
+func decryptBlobWithAAD(key []byte, blobJSON string, aad []byte) ([]byte, error) {
+	return decryptBlobWithResolverAndAAD(key, blobJSON, aad, resolveAEADKey)
+}
+
+func decryptBlobWithResolverAndAAD(key []byte, blobJSON string, expectedAAD []byte, resolver keyResolver) ([]byte, error) {
 	effectiveKey, err := resolver(key)
 	if err != nil {
 		return nil, err
@@ -367,6 +387,18 @@ func decryptBlobWithResolver(key []byte, blobJSON string, resolver keyResolver) 
 	if err != nil {
 		return nil, err
 	}
+	aad, err := decodeBlobAAD(blob)
+	if err != nil {
+		return nil, err
+	}
+	if len(aad) > 0 && len(expectedAAD) > 0 && string(aad) != string(expectedAAD) {
+		return nil, errDecryptFailed
+	}
+	if len(aad) == 0 {
+		aad = nil
+	} else if len(expectedAAD) > 0 {
+		aad = expectedAAD
+	}
 	block, err := aes.NewCipher(effectiveKey)
 	if err != nil {
 		return nil, err
@@ -375,11 +407,18 @@ func decryptBlobWithResolver(key []byte, blobJSON string, resolver keyResolver) 
 	if err != nil {
 		return nil, err
 	}
-	plain, err := aead.Open(nil, nonce, ciphertext, nil)
+	plain, err := aead.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
 		return nil, errDecryptFailed
 	}
 	return plain, nil
+}
+
+func decodeBlobAAD(blob encryptedBlob) ([]byte, error) {
+	if blob.AADB64 == "" {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(blob.AADB64)
 }
 
 func mustRandom(n int) []byte {
