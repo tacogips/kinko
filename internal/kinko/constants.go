@@ -6,6 +6,7 @@ const (
 	cmdLock      = "lock"
 	cmdStatus    = "status"
 	cmdBackup    = "backup"
+	cmdRestore   = "restore"
 	cmdVersion   = "version"
 	cmdSet       = "set"
 	cmdSetKey    = "set-key"

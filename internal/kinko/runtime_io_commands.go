@@ -187,14 +187,8 @@ func runImportWithOptions(opts globalOptions, importOpts importOptions, stdin io
 	var content []byte
 	if importOpts.filePath != "" {
 		if !stdinIsTTY {
-			stdinContent, err := io.ReadAll(stdin)
-			if err != nil {
-				wrapped := fmt.Errorf("read stdin: %w", err)
-				return newCLIError(exitCodeIOFailed, wrapped.Error(), wrapped)
-			}
-			if strings.TrimSpace(string(stdinContent)) != "" {
-				err := errors.New("import accepts either --file or stdin pipe input, not both")
-				return newCLIError(exitCodePolicyFailed, err.Error(), err)
+			if err := checkNoConflictingStdinPipe(stdin); err != nil {
+				return err
 			}
 		}
 		content, err = os.ReadFile(importOpts.filePath)
@@ -288,6 +282,49 @@ func runImportWithOptions(opts globalOptions, importOpts importOptions, stdin io
 	return nil
 }
 
+// stdinConflictProbeBufSize bounds the single Read call used by
+// checkNoConflictingStdinPipe to detect a conflicting --file-plus-piped-stdin
+// invocation (Finding 3).
+const stdinConflictProbeBufSize = 4096
+
+// checkNoConflictingStdinPipe detects the mutually-exclusive combination of
+// `--file` plus non-empty piped stdin without draining stdin unboundedly.
+//
+// The previous implementation called io.ReadAll(stdin) purely to see whether
+// stdin also carried piped data. If a process inherits stdin as an open pipe
+// that is never closed, io.ReadAll blocks forever waiting for EOF, and once
+// data does start flowing it buffers an unbounded amount of it in memory.
+//
+// This replaces that with a SINGLE bounded Read call into a fixed-size
+// buffer. Residual limitation: a single bounded Read call still blocks if
+// stdin is an open pipe that is idle (no data yet, not closed) - it does not
+// eliminate blocking for that specific case. It only prevents unbounded
+// blocking/memory growth once data does start flowing or once EOF arrives:
+// this turns "blocks forever AND buffers unboundedly once data flows" into
+// "blocks only until the first data-or-EOF from this one Read call, bounded
+// to stdinConflictProbeBufSize bytes read."
+func checkNoConflictingStdinPipe(stdin io.Reader) error {
+	buf := make([]byte, stdinConflictProbeBufSize)
+	n, err := stdin.Read(buf)
+	if err != nil && err != io.EOF {
+		wrapped := fmt.Errorf("read stdin: %w", err)
+		return newCLIError(exitCodeIOFailed, wrapped.Error(), wrapped)
+	}
+	// n == 0 (whether err is io.EOF, nil, or unset) means stdin is empty:
+	// io.Reader's contract permits a zero-length read without error, and
+	// EOF may arrive together with (or instead of) data on the same call.
+	if n == 0 {
+		return nil
+	}
+	for _, b := range buf[:n] {
+		if !isASCIISpace(b) {
+			err := errors.New("import accepts either --file or stdin pipe input, not both")
+			return newCLIError(exitCodePolicyFailed, err.Error(), err)
+		}
+	}
+	return nil
+}
+
 func renderImportSummary(w io.Writer, shell, profile, path string, sharedKeys, repoKeys []string, shared, repoSpecific map[string]string, withValues bool) {
 	_, _ = fmt.Fprintln(w, "Planned import:")
 	_, _ = fmt.Fprintf(w, "  shell: %s\n", shell)
@@ -321,12 +358,33 @@ func (s importScopes) merged() map[string]string {
 	return out
 }
 
+// unterminatedQuotedValueReason is the parse-error reason string returned by
+// the posix/fish quoted-value parsers when an opening quote has no matching
+// closing quote within the text scanned so far. parseImportScopes treats this
+// specific reason as a signal that more physical lines may complete the
+// value (see Finding 1: multi-line quoted value round-trip), rather than an
+// immediate hard failure. It is only surfaced to the caller as a final error
+// once no further input lines remain.
+const unterminatedQuotedValueReason = "unterminated quoted value"
+
+// shellSupportsMultilineQuotedValues reports whether the given normalized
+// shell's quoted-value export format (quotePosix/quoteFish) can emit literal
+// embedded newlines inside a single quoted token, which requires the import
+// parser to be able to rejoin physical lines when scanning for the closing
+// quote. Nu escapes newlines as "\n" in its double-quoted output
+// (quoteNu/parseNuQuotedImportValue) and therefore never needs this.
+func shellSupportsMultilineQuotedValues(shell string) bool {
+	return shell == shellPosix || shell == shellFish
+}
+
 func parseImportScopes(shell, content string, allowShared bool) (importScopes, error) {
 	out := importScopes{shared: map[string]string{}, repoSpecific: map[string]string{}}
 	currentScope := "repo"
 	lines := strings.Split(content, "\n")
-	for i, raw := range lines {
+	multiline := shellSupportsMultilineQuotedValues(shell)
+	for i := 0; i < len(lines); i++ {
 		lineNo := i + 1
+		raw := lines[i]
 		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
@@ -348,10 +406,31 @@ func parseImportScopes(shell, content string, allowShared bool) (importScopes, e
 			}
 			continue
 		}
-		key, value, reason := parseImportLine(shell, line)
+		// assembled accumulates the logical assignment text, starting from
+		// the current line and progressively growing by one physical line
+		// (rejoined with a single "\n", matching what quotePosix/quoteFish
+		// actually emit for embedded newlines) whenever the value parser
+		// reports an unterminated quote and further input is available.
+		assembled := line
+		consumedTo := i
+		var key, value, reason string
+		for {
+			key, value, reason = parseImportLine(shell, assembled)
+			if reason != unterminatedQuotedValueReason || !multiline {
+				break
+			}
+			if consumedTo+1 >= len(lines) {
+				// No more input to draw from: this is a genuine unterminated
+				// quoted value, reported against the original starting line.
+				break
+			}
+			consumedTo++
+			assembled = assembled + "\n" + lines[consumedTo]
+		}
 		if reason != "" {
 			return importScopes{}, fmt.Errorf("import parse error (shell=%s, line=%d): %s", shell, lineNo, reason)
 		}
+		i = consumedTo
 		if currentScope == "shared" {
 			out.shared[key] = value
 			continue
@@ -429,9 +508,15 @@ func parsePosixImportValue(raw string) (string, string) {
 	return raw, ""
 }
 
+// posixSingleQuoteEscape is the literal token quotePosix emits in place of a
+// single embedded ' character: '...'"'"'...' - closing the quoted segment,
+// emitting an escaped literal quote via a double-quoted single-quote, then
+// reopening the quoted segment.
+const posixSingleQuoteEscape = "\"'\""
+
 func parsePosixSingleQuotedImportValue(raw string) (string, string) {
 	if raw == "" {
-		return "", "unterminated quoted value"
+		return "", unterminatedQuotedValueReason
 	}
 	var b strings.Builder
 	i := 0
@@ -445,47 +530,92 @@ func parsePosixSingleQuotedImportValue(raw string) (string, string) {
 			i++
 		}
 		if i >= len(raw) {
-			return "", "unterminated quoted value"
+			return "", unterminatedQuotedValueReason
 		}
 		b.WriteString(raw[segStart:i])
 		i++
 		if i == len(raw) {
 			break
 		}
-		if !strings.HasPrefix(raw[i:], "\"'\"") {
+		// A run of remaining bytes shorter than the full escape sequence
+		// might simply be a partial match because more input (a further
+		// physical line) has not been joined in yet - treat that as
+		// "unterminated" so the multi-line continuation logic in
+		// parseImportScopes (Finding 1) can retry with another line before
+		// deciding it is a genuine syntax error.
+		if !strings.HasPrefix(raw[i:], posixSingleQuoteEscape) {
+			if len(raw[i:]) < len(posixSingleQuoteEscape) && strings.HasPrefix(posixSingleQuoteEscape, raw[i:]) {
+				return "", unterminatedQuotedValueReason
+			}
 			return "", "invalid single-quote sequence"
 		}
 		b.WriteByte('\'')
-		i += len("\"'\"")
+		i += len(posixSingleQuoteEscape)
 	}
 	return b.String(), ""
 }
 
+// parsePosixDoubleQuotedImportValue scans raw (which the caller guarantees
+// starts with '"') byte-by-byte with escape awareness, looking for the
+// unescaped '"' that terminates the value. This replaces a prior
+// first-byte/last-byte check that mishandled two cases (Finding 2):
+//
+//  1. A trailing `\"` (an escaped quote, i.e. a literal `"` inside the
+//     value) is not a terminator; scanning must continue past it. The old
+//     code treated any string ending in `"` as terminated, silently
+//     accepting genuinely unterminated input like `"abc\"` as `abc\`.
+//  2. Trailing non-whitespace content after the real closing quote (e.g.
+//     `"a"b"`) is rejected as a parse error rather than silently
+//     concatenated. Implementing full POSIX word-concatenation semantics
+//     (quote-then-bareword-then-quote joining) is out of scope and
+//     ambiguous, and silently reinterpreting it risks mis-importing secret
+//     values. Erroring out is the safer choice for a tool handling secret
+//     values, consistent with command.md's "Any unsupported tokenization is
+//     parse error" rule for the POSIX parser and design-import.md's
+//     non-goal of shell-evaluation-equivalent parsing.
 func parsePosixDoubleQuotedImportValue(raw string) (string, string) {
-	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+	if len(raw) == 0 || raw[0] != '"' {
 		return "", "unterminated quoted value"
 	}
-	inner := raw[1 : len(raw)-1]
 	var b strings.Builder
-	for i := 0; i < len(inner); i++ {
-		c := inner[i]
+	i := 1
+	closed := false
+	for i < len(raw) {
+		c := raw[i]
+		if c == '"' {
+			closed = true
+			i++
+			break
+		}
 		if c != '\\' {
 			b.WriteByte(c)
+			i++
 			continue
 		}
-		if i+1 >= len(inner) {
-			b.WriteByte('\\')
-			continue
+		// Backslash: if it's the last byte of currently available input,
+		// this value is incomplete rather than a decided error - the
+		// multi-line continuation logic in parseImportScopes (Finding 1)
+		// will retry with more input if any remains. Reporting
+		// "unterminated quoted value" here lets that mechanism decide
+		// whether to append another line or surface a hard error once no
+		// more input is available.
+		if i+1 >= len(raw) {
+			return "", unterminatedQuotedValueReason
 		}
-		i++
-		switch inner[i] {
+		switch raw[i+1] {
 		case '\\', '"', '$', '`':
-			b.WriteByte(inner[i])
-		case '\n':
+			b.WriteByte(raw[i+1])
 		default:
 			b.WriteByte('\\')
-			b.WriteByte(inner[i])
+			b.WriteByte(raw[i+1])
 		}
+		i += 2
+	}
+	if !closed {
+		return "", unterminatedQuotedValueReason
+	}
+	if strings.TrimFunc(raw[i:], func(r rune) bool { return r <= 0xFF && isASCIISpace(byte(r)) }) != "" {
+		return "", posixImportAssignmentFormatError()
 	}
 	return b.String(), ""
 }
@@ -499,14 +629,18 @@ func posixImportAssignmentFormatError() string {
 }
 
 func parseImportFishLine(line string) (string, string, string) {
+	// Note: unlike the posix path, the fish format requires a terminal ';'
+	// (design-import.md "Fish parser" rules), which can only ever appear on
+	// the LAST physical line of a multi-line value. So, unlike the old
+	// implementation, this function no longer trims a trailing ';' off the
+	// whole line up front - instead the quoted-value scan below consumes
+	// exactly the quoted token and then requires the trailing ';' (and
+	// nothing else but whitespace) to immediately follow the closing quote.
 	if !strings.HasPrefix(line, "set -gx ") {
 		return "", "", "unsupported assignment format"
 	}
-	if !strings.HasSuffix(line, ";") {
-		return "", "", "unsupported assignment format"
-	}
-	body := strings.TrimSpace(strings.TrimSuffix(line, ";"))
-	rest := strings.TrimSpace(strings.TrimPrefix(body, "set -gx "))
+	rest := strings.TrimPrefix(line, "set -gx ")
+	rest = strings.TrimLeft(rest, " \t")
 	if rest == "" {
 		return "", "", "unsupported assignment format"
 	}
@@ -518,7 +652,7 @@ func parseImportFishLine(line string) (string, string, string) {
 	if err := validateEnvKey(key); err != nil {
 		return "", "", "invalid key syntax"
 	}
-	valueExpr := strings.TrimSpace(rest[sep+1:])
+	valueExpr := strings.TrimLeft(rest[sep+1:], " \t")
 	value, reason := parseFishQuotedImportValue(valueExpr)
 	if reason != "" {
 		return "", "", reason
@@ -526,35 +660,57 @@ func parseImportFishLine(line string) (string, string, string) {
 	return key, value, ""
 }
 
+// parseFishQuotedImportValue scans raw (which the caller guarantees starts
+// with '\”) byte-by-byte, decoding the two fish single-quote escape
+// sequences: \\ for a literal backslash (required so backslash-ending
+// values round-trip, per Finding F-02) and \' for a literal embedded quote
+// (design-import.md "Fish parser" rules: "Fish single-quote escaping (\')
+// is supported"). After the closing quote, only the mandatory terminal ';'
+// (design-import.md: "Terminal ';' is required") plus surrounding
+// whitespace may follow.
 func parseFishQuotedImportValue(raw string) (string, string) {
-	if len(raw) < 2 || raw[0] != '\'' || raw[len(raw)-1] != '\'' {
-		return "", "unterminated quoted value"
+	if len(raw) == 0 || raw[0] != '\'' {
+		return "", unterminatedQuotedValueReason
 	}
-	inner := raw[1 : len(raw)-1]
 	var b strings.Builder
-	for i := 0; i < len(inner); i++ {
-		c := inner[i]
-		if c == '\\' {
-			if i+1 >= len(inner) {
-				return "", "unsupported escape sequence"
-			}
-			switch inner[i+1] {
-			case '\\':
-				b.WriteByte('\\')
-				i++
-				continue
-			case '\'':
-				b.WriteByte('\'')
-				i++
-				continue
-			default:
-				return "", "unsupported escape sequence"
-			}
-		}
+	i := 1
+	closed := false
+	for i < len(raw) {
+		c := raw[i]
 		if c == '\'' {
-			return "", "unsupported assignment format"
+			closed = true
+			i++
+			break
 		}
-		b.WriteByte(c)
+		if c != '\\' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		// As with the posix double-quote scanner, a trailing backslash with
+		// no following byte in the currently available input is treated as
+		// "unterminated" so Finding 1's multi-line continuation logic in
+		// parseImportScopes can retry with another line before deciding
+		// it's a genuine error.
+		if i+1 >= len(raw) {
+			return "", unterminatedQuotedValueReason
+		}
+		switch raw[i+1] {
+		case '\\':
+			b.WriteByte('\\')
+		case '\'':
+			b.WriteByte('\'')
+		default:
+			return "", "unsupported escape sequence"
+		}
+		i += 2
+	}
+	if !closed {
+		return "", unterminatedQuotedValueReason
+	}
+	trailer := strings.TrimFunc(raw[i:], func(r rune) bool { return r <= 0xFF && isASCIISpace(byte(r)) })
+	if trailer != ";" {
+		return "", "unsupported assignment format"
 	}
 	return b.String(), ""
 }

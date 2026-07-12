@@ -2,10 +2,12 @@ package kinko
 
 import (
 	"bytes"
-	"os"
+	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMoveLocalToSharedSuccess(t *testing.T) {
@@ -239,17 +241,15 @@ func TestMovePersistenceFailureLeavesVaultUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tmpDir := filepath.Join(opts.dataDir, "vault", "vault.v1.bin.tmp")
-	if err := os.Mkdir(tmpDir, 0o700); err != nil {
-		t.Fatal(err)
+	vaultPath := filepath.Join(opts.dataDir, "vault", "vault.v1.bin")
+	originalRename := atomicRename
+	atomicRename = func(oldpath, newpath string) error {
+		if newpath == vaultPath {
+			return errors.New("injected vault persistence failure")
+		}
+		return originalRename(oldpath, newpath)
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "block"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.Remove(filepath.Join(tmpDir, "block"))
-		_ = os.Remove(tmpDir)
-	})
+	t.Cleanup(func() { atomicRename = originalRename })
 
 	out.Reset()
 	err := runMove(opts, []string{"local-to-shared", "MOVE_ME", "--yes"}, strings.NewReader(""), &out, &bytes.Buffer{})
@@ -308,4 +308,140 @@ func loadVaultForMoveTest(t *testing.T, opts globalOptions) *vaultData {
 		t.Fatal(err)
 	}
 	return vd
+}
+
+// TestRunMove_LockNotHeldDuringPrompt is a Finding 3 regression test
+// proving that runMoveWithOptions does not hold the mutation lock while
+// blocked waiting on the interactive confirmation prompt. It starts a move
+// (Yes: false) with stdin backed by an io.Pipe that is never written to
+// (so the confirmation read blocks indefinitely), then, from the main test
+// goroutine, attempts to acquire the mutation lock directly while the move
+// call is stuck at the prompt. If the lock were held across the prompt
+// (the pre-fix behavior), this acquisition would fail/hang; after the fix
+// it must succeed promptly.
+func TestRunMove_LockNotHeldDuringPrompt(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var setOut bytes.Buffer
+	if err := runSet(opts, []string{"MOVE_ME=local"}, strings.NewReader(""), &setOut); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		moveOpts := moveSecretOptions{
+			Direction: moveDirectionLocalToShared,
+			Key:       "MOVE_ME",
+		}
+		done <- runMoveWithOptions(opts, moveOpts, pr, io.Discard, io.Discard)
+	}()
+
+	var release func()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := acquireMutationLock(opts.dataDir)
+		if err == nil {
+			release = r
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if release == nil {
+		t.Fatal("expected to acquire mutation lock while move is blocked on confirmation prompt, but lock was held")
+	}
+	release()
+
+	if _, err := pw.Write([]byte("n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runMoveWithOptions failed after decline: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runMoveWithOptions did not complete after prompt was answered")
+	}
+
+	if got := valueAtScope(t, opts, "MOVE_ME"); got != "local" {
+		t.Fatalf("declined move must leave source unchanged, got %q", got)
+	}
+}
+
+// TestRunMove_RevalidatesUnderLockAfterConcurrentDeletion is a Finding 3
+// regression test for the re-validation-under-lock behavior: if the source
+// key is deleted by a concurrent process between the pre-lock preview
+// (confirmation prompt) and the post-lock re-load, the move must fail with
+// a distinct "state changed" error rather than silently proceeding with
+// stale assumptions.
+func TestRunMove_RevalidatesUnderLockAfterConcurrentDeletion(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var setOut bytes.Buffer
+	if err := runSet(opts, []string{"MOVE_ME=local"}, strings.NewReader(""), &setOut); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		moveOpts := moveSecretOptions{
+			Direction: moveDirectionLocalToShared,
+			Key:       "MOVE_ME",
+		}
+		done <- runMoveWithOptions(opts, moveOpts, pr, io.Discard, io.Discard)
+	}()
+
+	// Wait until the move is blocked on the confirmation prompt, proven by
+	// being able to acquire the lock ourselves (and release it right
+	// away). Then simulate a concurrent mutator deleting the source key
+	// directly at the storage layer (bypassing the mutation lock the way a
+	// racing process's own lock-guarded critical section would have
+	// already completed and released by the time we get here), before
+	// answering "y" to the pending move confirmation.
+	var release func()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := acquireMutationLock(opts.dataDir)
+		if err == nil {
+			release = r
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if release == nil {
+		t.Fatal("expected to acquire mutation lock while move is blocked on confirmation prompt")
+	}
+	release()
+
+	dek, vd, err := loadUnlockedVaultForMove(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(vd.Profiles[opts.profile][opts.path], "MOVE_ME")
+	if err := saveVault(opts.dataDir, dek, vd); err != nil {
+		t.Fatalf("simulated concurrent delete failed: %v", err)
+	}
+
+	if _, err := pw.Write([]byte("y\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected move to fail after concurrent deletion of source key")
+		}
+		if !strings.Contains(err.Error(), "state changed since confirmation") {
+			t.Fatalf("expected a distinct concurrent-change error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runMoveWithOptions did not complete after prompt was answered")
+	}
 }

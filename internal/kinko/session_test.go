@@ -284,3 +284,142 @@ func TestUnlockSession_MigratesLegacyPasswordDerivedSessionKey(t *testing.T) {
 		t.Fatalf("expected migrated session to remain usable: %v", err)
 	}
 }
+
+// TestUnlockSession_MigrationContendsForMutationLock verifies that when
+// unlockSession needs to perform legacy session-key migration, it acquires
+// the same mutation lock used by password change before writing metadata.
+// acquireMutationLock in this codebase is fail-fast (it does not block
+// waiting for a live, non-stale lock; see acquireMetadataLock), so a
+// migration-triggering unlock that races a concurrent lock holder must
+// surface a lock-conflict error rather than silently proceeding to write
+// metadata -- which is exactly the race that could otherwise let a
+// migration write revert a just-changed password wrap. Once the lock is
+// released, a subsequent migration-triggering unlock must succeed and
+// complete the migration normally.
+func TestUnlockSession_MigrationContendsForMutationLock(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "pw"); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := loadMeta(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dek, err := unwrapDEKWithPassword(meta, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPub, legacyPriv := deriveSessionKeyPairFromPassword("pw")
+	legacyEncPriv, err := encryptBlob(dek, legacyPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.SessionPubKeyB64 = base64.StdEncoding.EncodeToString(legacyPub)
+	meta.EncSessionPrivB64 = legacyEncPriv
+	meta.SessionKeySource = ""
+	if err := saveMeta(dataDir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the mutation lock externally, simulating a concurrent password
+	// change that is mid-flight.
+	release, err := acquireMutationLock(dataDir)
+	if err != nil {
+		t.Fatalf("acquire mutation lock: %v", err)
+	}
+
+	if err := unlockSession(dataDir, 5*time.Minute, "pw"); err == nil {
+		release()
+		t.Fatal("expected migration-triggering unlock to fail to acquire the externally-held mutation lock, but it succeeded")
+	} else if !strings.Contains(err.Error(), "mutation lock") && !strings.Contains(err.Error(), "lock exists") {
+		release()
+		t.Fatalf("expected a lock-contention error, got: %v", err)
+	}
+
+	// Metadata must remain untouched (still legacy) since the migration
+	// write must never have happened while the lock was held.
+	stillLegacy, err := loadMeta(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillLegacy.SessionKeySource != "" {
+		t.Fatalf("metadata must not be modified while mutation lock is externally held, got source=%q", stillLegacy.SessionKeySource)
+	}
+
+	release()
+
+	// Once the lock is free, the migration-triggering unlock must succeed
+	// and actually perform the migration.
+	if err := unlockSession(dataDir, 5*time.Minute, "pw"); err != nil {
+		t.Fatalf("unlock should succeed once mutation lock is released: %v", err)
+	}
+
+	migrated, err := loadMeta(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.SessionKeySource != sessionKeyRandom {
+		t.Fatalf("expected migration to complete after lock release, got source=%q", migrated.SessionKeySource)
+	}
+}
+
+// TestUnlockSession_NormalUnlockDoesNotBlockOnMutationLock verifies that a
+// normal unlock (no legacy migration needed) never acquires the mutation
+// lock, so it must return quickly even while the mutation lock is held
+// externally for an extended period. This guards against a regression that
+// would add lock contention/latency to the common unlock path.
+func TestUnlockSession_NormalUnlockDoesNotBlockOnMutationLock(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	// A freshly initialized vault already uses the random session key
+	// source, so no migration is needed on unlock.
+	meta, err := loadMeta(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.SessionKeySource != sessionKeyRandom {
+		t.Fatalf("precondition: expected random session key source, got %q", meta.SessionKeySource)
+	}
+
+	release, err := acquireMutationLock(dataDir)
+	if err != nil {
+		t.Fatalf("acquire mutation lock: %v", err)
+	}
+	t.Cleanup(release)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- unlockSession(dataDir, 5*time.Minute, "pw")
+	}()
+
+	// If unlockSession incorrectly acquired the mutation lock (regression),
+	// it would block here until the deferred release() at test end -- so
+	// we must always drain `done` (even after a timeout) rather than
+	// returning early, to avoid leaking a goroutine that races with
+	// TestMain's later restoration of the package-level fake secret store.
+	//
+	// The timeout is generous (well beyond a single argon2id KDF pass, even
+	// under -race / heavy parallel test load) so it only trips on a genuine
+	// lock-contention regression, not on machine-load-driven KDF jitter.
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("normal unlock should not fail: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		release()
+		<-done
+		t.Fatal("normal unlock (no migration needed) blocked while mutation lock was held externally")
+	}
+}

@@ -379,6 +379,12 @@ func acquireMutationLock(dataDir string) (func(), error) {
 	return acquireMetadataLock(lockPath)
 }
 
+// metadataLockTakeoverSuffix names the fixed-path intent/mutex file used to
+// serialize stale-lock takeover attempts. It is deliberately a fixed name
+// (not random) so that concurrent takeover attempts contend for it via
+// O_CREATE|O_EXCL rather than racing independently.
+const metadataLockTakeoverSuffix = ".takeover"
+
 func acquireMetadataLock(lockPath string) (func(), error) {
 	metadata, err := currentMutationLockMetadata()
 	if err != nil {
@@ -398,20 +404,95 @@ func acquireMetadataLock(lockPath string) (func(), error) {
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		takeover, err := canTakeOverMetadataLock(lockPath, metadata.Hostname)
+		staleMeta, err := readMetadataLock(lockPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		takeover, err := evaluateMetadataLockTakeover(staleMeta, metadata.Hostname)
 		if err != nil {
 			return nil, err
 		}
 		if !takeover {
 			return nil, lockConflictError(lockPath)
 		}
-		if err := os.Remove(lockPath); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("remove stale lock %s: %w", lockPath, err)
+
+		acquired, freshRelease, err := attemptMetadataLockTakeover(lockPath, staleMeta, payload)
+		if err != nil {
+			return nil, err
 		}
+		if !acquired {
+			// Another process is driving the takeover (or already
+			// completed/superseded it); loop back and re-evaluate lockPath
+			// from scratch rather than touching it ourselves.
+			continue
+		}
+		return freshRelease, nil
 	}
+}
+
+// attemptMetadataLockTakeover serializes stale-lock takeover across
+// concurrent racers using a second, fixed-path O_CREATE|O_EXCL mutex
+// (lockPath+".takeover"). Only the single racer that wins creation of the
+// takeover-intent file is permitted to remove and recreate lockPath, which
+// eliminates the remove-then-recreate race where two racers could both
+// believe they hold the live lock. Losers (and the winner, once done) never
+// leave the takeover-intent file behind: it is removed before returning.
+//
+// It returns acquired=false (with no error) when this call did not end up
+// holding the lock -- either because another racer won the takeover mutex,
+// or because lockPath no longer matched the stale metadata we verified by
+// the time we won the mutex (superseded by a concurrent fresh acquisition).
+// Callers should retry the outer acquisition loop in that case.
+func attemptMetadataLockTakeover(lockPath string, staleMeta mutationLockMetadata, payload []byte) (bool, func(), error) {
+	takeoverPath := lockPath + metadataLockTakeoverSuffix
+	intentFile, err := os.OpenFile(takeoverPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			// Another racer is already driving takeover; do not touch
+			// lockPath ourselves.
+			return false, nil, nil
+		}
+		return false, nil, fmt.Errorf("create takeover intent %s: %w", takeoverPath, err)
+	}
+	_ = intentFile.Close()
+	defer func() {
+		_ = os.Remove(takeoverPath)
+	}()
+
+	// Re-verify staleness now that we hold exclusive takeover rights: a
+	// concurrent legitimate acquisition may have replaced lockPath while we
+	// were winning the intent mutex.
+	currentMeta, err := readMetadataLock(lockPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+	if !sameMutationLockMetadata(currentMeta, staleMeta) {
+		// lockPath was replaced (or its state changed) since we validated
+		// staleness; someone else already handled it.
+		return false, nil, nil
+	}
+
+	// We hold the takeover mutex and lockPath still matches the stale
+	// metadata we verified: no other racer can be concurrently
+	// removing/recreating lockPath, so this is now safe.
+	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, nil, fmt.Errorf("remove stale lock %s: %w", lockPath, err)
+	}
+	release, err := createMetadataLock(lockPath, payload)
+	if err != nil {
+		return false, nil, err
+	}
+	return true, release, nil
+}
+
+func sameMutationLockMetadata(a, b mutationLockMetadata) bool {
+	return a.PID == b.PID && a.Hostname == b.Hostname && a.CreatedAt == b.CreatedAt
 }
 
 func createMetadataLock(lockPath string, payload []byte) (func(), error) {
@@ -448,27 +529,38 @@ func currentMutationLockMetadata() (mutationLockMetadata, error) {
 	}, nil
 }
 
-func canTakeOverMetadataLock(lockPath, hostname string) (bool, error) {
+// readMetadataLock reads and parses the lock metadata at lockPath. It
+// returns an error satisfying errors.Is(err, os.ErrNotExist) when the lock
+// file does not exist, so callers can distinguish "no lock" from other
+// failures.
+func readMetadataLock(lockPath string) (mutationLockMetadata, error) {
 	b, err := os.ReadFile(lockPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
+			return mutationLockMetadata{}, err
 		}
-		return false, fmt.Errorf("read lock metadata %s: %w", lockPath, err)
+		return mutationLockMetadata{}, fmt.Errorf("read lock metadata %s: %w", lockPath, err)
 	}
 	var metadata mutationLockMetadata
 	if err := json.Unmarshal(b, &metadata); err != nil {
-		return false, lockConflictError(lockPath)
+		return mutationLockMetadata{}, lockConflictError(lockPath)
 	}
 	if metadata.PID <= 0 || metadata.Hostname == "" || metadata.CreatedAt == "" {
-		return false, lockConflictError(lockPath)
+		return mutationLockMetadata{}, lockConflictError(lockPath)
 	}
+	return metadata, nil
+}
+
+// evaluateMetadataLockTakeover reports whether the lock owner described by
+// metadata is stale (process no longer running on the same host) and can
+// therefore be taken over.
+func evaluateMetadataLockTakeover(metadata mutationLockMetadata, hostname string) (bool, error) {
 	if metadata.Hostname != hostname {
-		return false, lockConflictError(lockPath)
+		return false, nil
 	}
 	running, err := processIsRunning(metadata.PID)
 	if err != nil {
-		return false, lockConflictError(lockPath)
+		return false, nil
 	}
 	return !running, nil
 }
@@ -501,17 +593,24 @@ func saveMetaAtomically(dataDir string, meta *vaultMeta) error {
 		return err
 	}
 
-	tmpPath := metaPath + ".tmp"
-	_ = os.Remove(tmpPath)
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	metaDir := filepath.Dir(metaPath)
+	f, err := os.CreateTemp(metaDir, filepath.Base(metaPath)+".*.tmp")
 	if err != nil {
 		return err
 	}
+	tmpPath := f.Name()
 	cleanup := func() {
 		_ = f.Close()
 		_ = os.Remove(tmpPath)
 	}
 	defer cleanup()
+
+	// Fchmod before writing data so the temp file never has more
+	// permissive (umask-derived) permissions than the final 0600 target,
+	// even momentarily.
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
 
 	payload, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -529,7 +628,7 @@ func saveMetaAtomically(dataDir string, meta *vaultMeta) error {
 	if err := os.Rename(tmpPath, metaPath); err != nil {
 		return err
 	}
-	dir, err := os.Open(filepath.Dir(metaPath))
+	dir, err := os.Open(metaDir)
 	if err != nil {
 		return err
 	}

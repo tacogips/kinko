@@ -322,6 +322,36 @@ Input modes:
 - `--current-fd` for descriptor-based password input
 - `--force-tty` to allow line-based interactive prompting when stdin is redirected
 
+### `kinko restore <archive>`
+
+Restore a vault from an archive produced by `kinko backup` into the target kinko data directory.
+
+Examples:
+
+```bash
+kinko restore ./backups/kinko-backup-20260712T010203Z.zip
+printf '%s\n' "$KINKO_PASSWORD" | kinko restore --current-stdin --kinko-dir /tmp/kinko-restore kinko-backup-20260712T010203Z.zip
+kinko restore --include-bootstrap kinko-backup-20260712T010203Z.zip
+```
+
+Behavior:
+- Refuses to run if the target kinko data directory already contains vault state; use a different `--kinko-dir` or run `kinko explosion` first.
+- Verifies, before writing anything, that the supplied password unlocks the restored vault (DEK unwrap plus vault/config blob decrypt).
+- The restored vault always starts in the LOCKED state; no session or lock state is restored. Run `kinko unlock` afterward.
+- `--include-bootstrap` also refuses to overwrite an existing file at the `--config` path.
+- Acquires the mutation lock on the target data directory before writing.
+- Applies strict archive-format validation and rejects anything that does not match exactly what `kinko backup` produces, including hostile or malformed archives, as a policy failure.
+- Requires the archive path to be a regular file; symlinks and directories are rejected.
+
+Input modes:
+- interactive prompt on TTY stdin (prompts "Backup password:")
+- `--current-stdin` for non-interactive stdin
+- `--current-fd` for descriptor-based password input
+- `--force-tty` to allow line-based interactive prompting when stdin is redirected
+
+Detailed design:
+- `design-docs/specs/design-restore.md`
+
 ### `kinko set <key>=<value> [<key>=<value> ...]`
 
 Create or update one or more secret values under the resolved profile/path scope.
@@ -773,6 +803,7 @@ Current diagnostics include:
 | `show` | `--all-scopes` |
 | `path prune-missing` | `--all-profiles`, `--yes`/`-y`, `--json` |
 | `backup` | `--dest-path`, `--current-stdin`, `--current-fd`, `--force-tty` |
+| `restore` | `--current-stdin`, `--current-fd`, `--force-tty`, `--include-bootstrap` |
 | `export`, `direnv export` | optional shell argument, `--shared-only`, `--with-scope-comments`, `--exclude` |
 | `import` | optional shell argument, `--file`, `--yes`/`-y`, `--confirm-with-values`, `--allow-shared` |
 | `exec` | `--all`, `--env` |
@@ -845,6 +876,13 @@ Current command-specific structured mappings:
 | `backup` | Mutation lock conflict | `12` |
 | `backup` | Invalid destination policy | `11` |
 | `backup` | Persistence / I/O failure | `13` |
+| `restore` | Invalid arguments / mixed password modes | `11` |
+| `restore` | Target vault already exists / bootstrap overwrite | `11` |
+| `restore` | Malformed or disallowed archive structure | `11` |
+| `restore` | Wrong password (check byte/CRC/DEK unwrap auth failure) | `10` |
+| `restore` | Mutation lock conflict | `12` |
+| `restore` | File read/write failures | `13` |
+| `restore` | Restored metadata fails safety validation | `14` |
 | `export` | Invalid shell / exclude / sensitive-output policy failure | `11` |
 | `export` | Session/vault/output I/O failure | `13` |
 | `import` | Invalid shell / input / confirmation policy failure | `11` |

@@ -5,7 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -125,5 +129,81 @@ func TestNewVaultUsesRandomSessionKeyMaterial(t *testing.T) {
 	legacyPub, _ := deriveSessionKeyPairFromPassword("test-password")
 	if meta.SessionPubKeyB64 == base64.StdEncoding.EncodeToString(legacyPub) {
 		t.Fatal("new vault must not store password-derived session public key")
+	}
+}
+
+// TestWrite0600Atomically_ConcurrentWritersNeverCorruptFile writes to the
+// same target path from many goroutines concurrently and asserts the final
+// file content is always exactly one writer's complete payload: never
+// truncated, never a mix of two payloads, and never empty. This guards
+// against the fixed ".tmp" staging path being clobbered by a concurrent
+// writer's in-progress write before rename.
+func TestWrite0600Atomically_ConcurrentWritersNeverCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "meta.v1.json")
+
+	const writers = 16
+	payloads := make([][]byte, writers)
+	for i := range payloads {
+		// Distinct, sizeable payloads per writer so a truncated/mixed
+		// result would be detectable.
+		payloads[i] = []byte(fmt.Sprintf("writer-%02d:%s\n", i, strings.Repeat("x", 256+i)))
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, writers)
+	wg.Add(writers)
+	for i := 0; i < writers; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			errs[i] = write0600Atomically(target, payloads[i])
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("writer %d: unexpected error: %v", i, err)
+		}
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read final file: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("final file must not be empty")
+	}
+	matched := false
+	for _, p := range payloads {
+		if string(got) == string(p) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		t.Fatalf("final file content does not exactly match any single writer's payload (truncated/mixed?): %q", string(got))
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat final file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("unexpected file permissions: got=%o want=0600", perm)
+	}
+
+	if _, err := os.Stat(target + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("stray fixed-name tmp file should not remain: err=%v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() != filepath.Base(target) {
+			t.Fatalf("unexpected leftover file in target dir: %s", e.Name())
+		}
 	}
 }

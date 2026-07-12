@@ -489,19 +489,29 @@ func write0600(path string, data []byte) error {
 	return nil
 }
 
+// atomicRename is an indirection over os.Rename so tests can inject
+// commit-step failures without depending on staging-file naming.
+var atomicRename = os.Rename
+
 func write0600Atomically(path string, data []byte) error {
-	tmpPath := path + ".tmp"
-	_ = os.Remove(tmpPath)
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
+	tmpPath := f.Name()
 	cleanup := func() {
 		_ = f.Close()
 		_ = os.Remove(tmpPath)
 	}
 	defer cleanup()
 
+	// Fchmod before writing data so the temp file never has more
+	// permissive (umask-derived) permissions than the final 0600 target,
+	// even momentarily.
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
 	if _, err := f.Write(data); err != nil {
 		return err
 	}
@@ -511,15 +521,15 @@ func write0600Atomically(path string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := atomicRename(tmpPath, path); err != nil {
 		return err
 	}
-	dir, err := os.Open(filepath.Dir(path))
+	dirFile, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	return dir.Sync()
+	defer dirFile.Close()
+	return dirFile.Sync()
 }
 
 func resolveAEADKey(key []byte) ([]byte, error) {

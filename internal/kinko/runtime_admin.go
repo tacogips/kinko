@@ -15,11 +15,15 @@ import (
 )
 
 func runExplosion(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer) error {
-	reader := bufio.NewReader(stdin)
 	_, _ = fmt.Fprintln(stderr, "DANGER: This will permanently delete all vault data in the current data dir.")
 	_, _ = fmt.Fprintln(stderr, "All registered data will be lost and this action cannot be undone.")
 	_, _ = fmt.Fprintln(stderr, "Password re-entry is required for this operation.")
-	dek, err := verifyExplosionPassword(opts, reader, stderr)
+	// verifyExplosionPassword performs a TTY-aware, no-echo password read
+	// before any bufio.Reader buffers stdin bytes (Finding 1). It returns
+	// the reader that must be used for all subsequent line-based prompts
+	// (confirmation + confirmation token) so nothing is lost or
+	// double-buffered between the password step and the rest of this flow.
+	dek, reader, err := verifyExplosionPassword(opts, stdin, stderr)
 	if err != nil {
 		return err
 	}
@@ -57,6 +61,26 @@ func runExplosion(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer)
 		_, _ = fmt.Fprintln(stdout, "aborted")
 		return nil
 	}
+
+	// Finding 2: the confirmation-token check above may have taken an
+	// arbitrarily long time (it waits on interactive input), during which a
+	// concurrent mutator (e.g. `kinko set`) could have run and recreated
+	// vault data files. Acquire the exclusive mutation lock and
+	// re-validate the target layout under the lock immediately before the
+	// irreversible purge, so no concurrent mutation can race with (and
+	// survive) the destroy.
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		return newCLIError(exitCodeLockConflict, "Explosion could not acquire mutation lock.", err)
+	}
+	defer release()
+	if err := validateExplosionTarget(opts.dataDir); err != nil {
+		return err
+	}
+	if err := validateKinkoDataDirLayout(filepath.Clean(opts.dataDir)); err != nil {
+		return err
+	}
+
 	if err := deleteSessionWrapKey(opts.dataDir); err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: session wrap key cleanup failed: %v\n", err)
 	}
@@ -129,7 +153,12 @@ func validateKinkoDataDirLayout(dataDir string) error {
 	if err != nil {
 		return fmt.Errorf("read vault dir: %w", err)
 	}
-	allowedVault := map[string]bool{"meta.v1.json": true, "vault.v1.bin": true, "config.v1.bin": true, vaultMarker: true}
+	// mutationLockFileName is permitted here because explosion itself
+	// holds that lock file during the purge phase (Finding 2), and a
+	// leftover lock file from a crashed process is not itself evidence of
+	// tampering; it must never fail this validation, at either the
+	// pre-prompt or post-lock validation call.
+	allowedVault := map[string]bool{"meta.v1.json": true, "vault.v1.bin": true, "config.v1.bin": true, vaultMarker: true, mutationLockFileName: true}
 	for _, entry := range vaultEntries {
 		if entry.IsDir() {
 			return fmt.Errorf("refusing explosion: unexpected subdirectory in vault dir: %s", filepath.Join(dataDir, "vault", entry.Name()))
@@ -213,27 +242,58 @@ func explosionConfirmationToken(dataDir string) string {
 	return strings.ToUpper(hex.EncodeToString(sum[:6]))
 }
 
-func verifyExplosionPassword(opts globalOptions, reader *bufio.Reader, stderr io.Writer) ([]byte, error) {
-	password, err := readSecretWithPromptBuffered(reader, stderr, "Re-enter password: ")
-	if err != nil {
-		return nil, err
+// verifyExplosionPassword re-verifies the vault password before allowing an
+// explosion (irreversible purge) to proceed. It is TTY-aware (Finding 1):
+// when stdin is a terminal, the password is read with the no-echo
+// readSecret helper directly against the raw stdin, before anything wraps
+// stdin in a *bufio.Reader. This avoids echoing the typed password to the
+// screen and avoids buffering bytes past the password line that a
+// bufio.Reader might read ahead. When stdin is not a terminal (e.g. piped
+// input in tests or non-interactive automation), behavior is unchanged
+// from before this fix: a single bufio.Reader is created up front and used
+// for the password line plus all subsequent buffered reads.
+//
+// The returned io.Reader must be used for all subsequent line-based input
+// (the "are you sure" confirmation and the confirmation-token entry): in
+// the terminal case it is a freshly created *bufio.Reader wrapping the
+// remaining stdin (safe, because the password itself was already consumed
+// directly from the raw fd via term.ReadPassword, not through this
+// reader); in the non-terminal case it is the very same *bufio.Reader used
+// for the password line, preserving today's buffered-multi-line behavior.
+func verifyExplosionPassword(opts globalOptions, stdin io.Reader, stderr io.Writer) ([]byte, *bufio.Reader, error) {
+	var password string
+	var err error
+	var reader *bufio.Reader
+	if isTerminalReader(stdin) {
+		password, err = readSecret(stdin, stderr, "Re-enter password: ")
+		if err != nil {
+			return nil, nil, err
+		}
+		reader = bufio.NewReader(stdin)
+	} else {
+		bufReader := bufio.NewReader(stdin)
+		password, err = readSecretWithPromptBuffered(bufReader, stderr, "Re-enter password: ")
+		if err != nil {
+			return nil, nil, err
+		}
+		reader = bufReader
 	}
 	password, err = sanitizePasswordValue(password)
 	if err != nil {
-		return nil, fmt.Errorf("password is invalid: %w", err)
+		return nil, nil, fmt.Errorf("password is invalid: %w", err)
 	}
 	meta, err := loadMeta(opts.dataDir)
 	if err != nil {
-		return nil, fmt.Errorf("load vault metadata: %w", err)
+		return nil, nil, fmt.Errorf("load vault metadata: %w", err)
 	}
 	dek, err := unwrapDEKWithPassword(meta, password)
 	if err != nil {
 		if isCredentialMismatchError(err) {
-			return nil, errors.New("password is invalid")
+			return nil, nil, errors.New("password is invalid")
 		}
-		return nil, fmt.Errorf("verify password: %w", err)
+		return nil, nil, fmt.Errorf("verify password: %w", err)
 	}
-	return dek, nil
+	return dek, reader, nil
 }
 
 func runConfig(opts globalOptions, args []string, stdout io.Writer) error {
@@ -260,7 +320,7 @@ func runConfig(opts globalOptions, args []string, stdout io.Writer) error {
 		}
 		release, err := acquireMutationLock(opts.dataDir)
 		if err != nil {
-			return fmt.Errorf("vault mutation in progress: %w", err)
+			return newCLIError(exitCodeLockConflict, "Vault mutation in progress.", err)
 		}
 		defer release()
 		dek, err := loadUnlockedDEK(opts.dataDir)

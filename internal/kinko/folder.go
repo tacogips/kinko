@@ -253,6 +253,12 @@ func runFolderUnlockWithOptions(opts globalOptions, folderOpts folderUnlockOptio
 		release()
 		return err
 	}
+	// Register the hold-mode exit signal handler before mounting so a signal
+	// delivered during or immediately after Mount is never missed; a signal
+	// registered only after Mount succeeds could be lost to a dropped ssh
+	// session or an early interrupt, leaving the folder mounted forever.
+	sigCh, stopSignals := registerFolderOwnerExitSignals()
+	defer stopSignals()
 	secret := deriveFolderSecret(dek, record)
 	if err := backend.Mount(context.Background(), record, secret, mountpoint); err != nil {
 		release()
@@ -262,12 +268,21 @@ func runFolderUnlockWithOptions(opts globalOptions, folderOpts folderUnlockOptio
 	release()
 	_, _ = fmt.Fprintf(stdout, "folder unlocked: %s\npath: %s\n", record.Name, mountpoint)
 	_, _ = fmt.Fprintf(stdout, "holding folder unlock; send interrupt or terminate to lock: %s\n", record.Name)
-	waitForFolderOwnerExit()
+	waitForFolderOwnerExit(sigCh)
 	release, err = acquireFolderLifecycleLock(opts.dataDir, record)
 	if err != nil {
 		return fmt.Errorf("folder lifecycle in progress: %w", err)
 	}
 	defer release()
+	status, err = backend.Status(context.Background(), record, mountpoint)
+	if err != nil {
+		return err
+	}
+	if !status.Mounted {
+		cleanupCreatedMountpoint(mountpoint, created)
+		_, _ = fmt.Fprintf(stdout, "folder already locked: %s\n", record.Name)
+		return nil
+	}
 	if err := backend.Unmount(context.Background(), record, mountpoint); err != nil {
 		return folderUnmountError(record.Name, err)
 	}
@@ -340,7 +355,11 @@ func runFolderRemoveWithOptions(opts globalOptions, folderOpts folderRemoveOptio
 	if err := validateFolderOptionName(folderRemove, name); err != nil {
 		return err
 	}
-	dek, cfg, records, err := loadFolderConfig(opts)
+	// A first, unlocked lookup only resolves the folder's identity (its
+	// FolderID never changes for a given profile/path/name) so the
+	// lifecycle lock path below can be computed. The authoritative config
+	// read happens after both locks are held; see the reload below.
+	_, _, records, err := loadFolderConfig(opts)
 	if err != nil {
 		return err
 	}
@@ -348,11 +367,32 @@ func runFolderRemoveWithOptions(opts globalOptions, folderOpts folderRemoveOptio
 	if err != nil {
 		return err
 	}
-	release, err := acquireFolderLifecycleLock(opts.dataDir, record)
+
+	// Acquire the mutation lock before the lifecycle lock, matching the
+	// lock ordering used by folder add, to avoid deadlocking against a
+	// concurrent add/config-set that also takes the mutation lock first.
+	releaseMutation, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		return fmt.Errorf("vault mutation in progress: %w", err)
+	}
+	defer releaseMutation()
+	releaseLifecycle, err := acquireFolderLifecycleLock(opts.dataDir, record)
 	if err != nil {
 		return fmt.Errorf("folder lifecycle in progress: %w", err)
 	}
-	defer release()
+	defer releaseLifecycle()
+
+	// Re-load the config now that both locks are held. Loading before the
+	// locks were acquired would let a concurrent folder add / config set
+	// race with this read-modify-write and be silently lost.
+	dek, cfg, records, err := loadFolderConfig(opts)
+	if err != nil {
+		return err
+	}
+	record, err = requireFolderRecord(records, opts, name)
+	if err != nil {
+		return err
+	}
 
 	backend := newFolderBackend(opts.dataDir)
 	status, err := backend.Status(context.Background(), record, folderMountpoint(record))
@@ -373,17 +413,30 @@ func runFolderRemoveWithOptions(opts globalOptions, folderOpts folderRemoveOptio
 		}
 	}
 
-	if !folderOpts.keepStorage {
-		if err := removeFolderStorage(opts.dataDir, record); err != nil {
-			return err
-		}
-	}
+	// Persist the config change (record removed) before deleting storage.
+	// If storage deletion were attempted first and then the config save
+	// failed, the record would be left pointing at deleted storage. Saving
+	// the config first means a subsequent storage-deletion failure only
+	// leaves an orphaned, already-unregistered storage directory, which is
+	// reported below for manual cleanup.
 	next := removeFolderRecord(records, record)
 	if err := saveFolderRecordsToConfig(cfg, next); err != nil {
 		return err
 	}
 	if err := saveFolderConfig(opts.dataDir, dek, cfg); err != nil {
 		return fmt.Errorf("write encrypted folder config: %w", err)
+	}
+	if !folderOpts.keepStorage {
+		if err := removeFolderStorage(opts.dataDir, record); err != nil {
+			dir, dirErr := checkedFolderStorageDir(opts.dataDir, record)
+			if dirErr != nil {
+				dir = ""
+			}
+			if dir != "" {
+				return fmt.Errorf("folder registration removed but storage deletion failed; remove leftover storage manually at %s: %w", dir, err)
+			}
+			return fmt.Errorf("folder registration removed but storage deletion failed; remove leftover storage manually: %w", err)
+		}
 	}
 	_, _ = fmt.Fprintf(stdout, "folder removed: %s\n", record.Name)
 	return nil
@@ -823,7 +876,27 @@ func ensureFolderGitignoreEntry(projectPath, name string) (bool, error) {
 	}
 	mode := os.FileMode(0o600)
 	if err == nil {
-		mode = info.Mode().Perm()
+		if info == nil {
+			// The Lstat above reported the file as missing, but the
+			// ReadFile that just followed succeeded: the file was created
+			// concurrently between the two calls. Re-stat now that we know
+			// it exists instead of dereferencing the nil info from the
+			// earlier Lstat. If the file has since been removed again by
+			// the same concurrent actor, fall back to the default mode;
+			// the WriteFile below will simply recreate it.
+			restated, statErr := os.Lstat(gitignorePath)
+			switch {
+			case statErr == nil:
+				info = restated
+				mode = info.Mode().Perm()
+			case errors.Is(statErr, os.ErrNotExist):
+				// Fall through with the default mode.
+			default:
+				return false, fmt.Errorf("stat .gitignore: %w", statErr)
+			}
+		} else {
+			mode = info.Mode().Perm()
+		}
 	}
 	var next strings.Builder
 	next.Write(content)
@@ -864,9 +937,20 @@ func gitignoreFolderEntry(name string) string {
 	return b.String()
 }
 
-func waitForInterruptOrTerminateSignal() {
+// registerFolderOwnerExitSignals installs the hold-mode exit signal handler
+// and returns the channel it delivers to along with a function that stops
+// the notification. It must be called before initiating the mount so that a
+// signal arriving during or immediately after the mount is never missed; a
+// handler installed only after a successful mount can leave the folder
+// mounted if the process is interrupted (dropped ssh session, early
+// Ctrl-C, etc.) before the handler is registered. SIGHUP is included so a
+// disconnected terminal also leads to the unmount cleanup path.
+func registerFolderOwnerExitSignals() (chan os.Signal, func()) {
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(ch)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	return ch, func() { signal.Stop(ch) }
+}
+
+func waitForInterruptOrTerminateSignal(ch <-chan os.Signal) {
 	<-ch
 }

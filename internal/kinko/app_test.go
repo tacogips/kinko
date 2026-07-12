@@ -161,6 +161,65 @@ func TestIsInitializedDataDir(t *testing.T) {
 	}
 }
 
+func TestRunInit_RefusesWhenPartialVaultArtifactPresent(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "vault"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate meta.v1.json and vault.v1.bin having been lost, leaving only
+	// config.v1.bin behind. isInitializedDataDir (AND semantics) would say
+	// "not initialized" here, but init must still refuse to avoid
+	// overwriting the surviving wrapped DEK.
+	if err := os.WriteFile(filepath.Join(dataDir, "vault", "config.v1.bin"), []byte("leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if isInitializedDataDir(dataDir) {
+		t.Fatal("precondition: partial vault dir must not be considered fully initialized")
+	}
+
+	opts := globalOptions{
+		dataDir:    dataDir,
+		configPath: filepath.Join(t.TempDir(), "bootstrap.toml"),
+		force:      false,
+		confirm:    true,
+	}
+	in := strings.NewReader("pw\npw\n")
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	err := runInit(opts, nil, in, &out, &errBuf)
+	if err == nil {
+		t.Fatal("expected runInit to refuse when a partial vault artifact is present")
+	}
+	if !strings.Contains(err.Error(), "partial or complete vault data") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+	// The surviving artifact must not be overwritten/destroyed.
+	b, readErr := os.ReadFile(filepath.Join(dataDir, "vault", "config.v1.bin"))
+	if readErr != nil {
+		t.Fatalf("surviving vault artifact should remain: %v", readErr)
+	}
+	if string(b) != "leftover" {
+		t.Fatalf("surviving vault artifact was modified: %q", string(b))
+	}
+}
+
+func TestAnyVaultArtifact(t *testing.T) {
+	d := t.TempDir()
+	if anyVaultArtifact(d) {
+		t.Fatal("should report no artifacts for empty dir")
+	}
+	if err := os.MkdirAll(filepath.Join(d, "vault"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "vault", "config.v1.bin"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !anyVaultArtifact(d) {
+		t.Fatal("should report an artifact when only config.v1.bin exists")
+	}
+}
+
 func TestRunInit_NonTTYWithoutForceSucceeds(t *testing.T) {
 	withFakeSessionStore(t)
 	opts := globalOptions{

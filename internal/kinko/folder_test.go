@@ -96,7 +96,9 @@ func withFakeFolderBackend(t *testing.T) *fakeFolderBackend {
 func withFolderOwnerExit(t *testing.T, wait func()) {
 	t.Helper()
 	prev := waitForFolderOwnerExit
-	waitForFolderOwnerExit = wait
+	waitForFolderOwnerExit = func(<-chan os.Signal) {
+		wait()
+	}
 	t.Cleanup(func() {
 		waitForFolderOwnerExit = prev
 	})

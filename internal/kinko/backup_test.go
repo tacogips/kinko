@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
@@ -269,6 +271,24 @@ func TestRunBackup_RejectsDestinationInsideDataDir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "must not be inside kinko data dir") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(destDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("rejected destination must not be created inside data dir: %v", statErr)
+	}
+}
+
+func TestWritePasswordLockedZip_RejectsTooManyEntries(t *testing.T) {
+	entries := make([]backupArchiveEntry, 0x10000)
+	for i := range entries {
+		entries[i] = backupArchiveEntry{name: fmt.Sprintf("kinko-backup/e%d", i)}
+	}
+	path := filepath.Join(t.TempDir(), "over.zip")
+	err := writePasswordLockedZip(path, "pw", entries)
+	if err == nil || !strings.Contains(err.Error(), "exceeds zip limit") {
+		t.Fatalf("expected entry-count limit error, got: %v", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed archive must be removed: %v", statErr)
 	}
 }
 

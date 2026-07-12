@@ -49,6 +49,7 @@ func TestRuntimeRootCommandSurface(t *testing.T) {
 		cmdPassword,
 		cmdPath,
 		cmdProfile,
+		cmdRestore,
 		cmdSet,
 		cmdSetKey,
 		cmdShow,
@@ -332,6 +333,54 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("restore", func(t *testing.T) {
+		opts := setupBackupFixture(t)
+		destDir := t.TempDir()
+		backupBase := []string{"--kinko-dir", opts.dataDir, "--config", opts.configPath, "backup", "--dest-path", destDir, "--current-stdin"}
+
+		var backupOut bytes.Buffer
+		if err := Run(backupBase, strings.NewReader("pw\n"), &backupOut, &bytes.Buffer{}); err != nil {
+			t.Fatalf("backup failed: %v", err)
+		}
+		archivePath := strings.TrimSpace(strings.TrimPrefix(backupOut.String(), "backup written: "))
+
+		targetDataDir := t.TempDir()
+		targetConfigPath := filepath.Join(t.TempDir(), "bootstrap.toml")
+		restoreArgs := []string{
+			"--kinko-dir", targetDataDir,
+			"--config", targetConfigPath,
+			"restore",
+			"--current-stdin",
+			"--current-fd", "-1",
+			"--force-tty",
+			"--include-bootstrap",
+			archivePath,
+		}
+
+		var restoreOut bytes.Buffer
+		if err := Run(restoreArgs, strings.NewReader("pw\n"), &restoreOut, &bytes.Buffer{}); err != nil {
+			t.Fatalf("restore failed: %v", err)
+		}
+		if !strings.Contains(restoreOut.String(), "restore complete") {
+			t.Fatalf("unexpected restore output: %q", restoreOut.String())
+		}
+		if _, err := os.Stat(filepath.Join(targetDataDir, "vault", "meta.v1.json")); err != nil {
+			t.Fatalf("restored vault meta missing: %v", err)
+		}
+		if _, err := os.Stat(targetConfigPath); err != nil {
+			t.Fatalf("restored bootstrap config missing: %v", err)
+		}
+	})
+
+	t.Run("restore requires exactly one positional archive argument", func(t *testing.T) {
+		if err := Run([]string{"restore"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+			t.Fatal("expected restore with zero args to fail")
+		}
+		if err := Run([]string{"restore", "a.zip", "b.zip"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+			t.Fatal("expected restore with two positional args to fail")
+		}
+	})
+
 	t.Run("export import", func(t *testing.T) {
 		opts := setupUnlockedForSet(t)
 		base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
@@ -400,8 +449,13 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 
 		t.Setenv("DIRENV_DIR", "-"+envrcPath)
+
+		// No --path flag is passed here, so DIRENV_DIR is consulted and
+		// wins per the existing (preserved) default behavior (Finding 4:
+		// only an *explicit* --path flag overrides DIRENV_DIR).
+		noPathBase := []string{"--kinko-dir", opts.dataDir, "--profile", opts.profile}
 		var out bytes.Buffer
-		if err := Run([]string{"--kinko-dir", opts.dataDir, "--path", filepath.Join(t.TempDir(), "other"), "--profile", opts.profile, "direnv", "export"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
+		if err := Run(append(append([]string{}, noPathBase...), "direnv", "export"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
 			t.Fatalf("direnv export failed: %v", err)
 		}
 		if !strings.Contains(out.String(), "export DIRENV_KEY='ok'") {
@@ -409,7 +463,7 @@ func TestRun_CobraBasedRegression_AllCommands(t *testing.T) {
 		}
 
 		var shellOut bytes.Buffer
-		if err := Run([]string{"--kinko-dir", opts.dataDir, "--path", filepath.Join(t.TempDir(), "other"), "--profile", opts.profile, "direnv", "export", "bash"}, strings.NewReader(""), &shellOut, &bytes.Buffer{}); err != nil {
+		if err := Run(append(append([]string{}, noPathBase...), "direnv", "export", "bash"), strings.NewReader(""), &shellOut, &bytes.Buffer{}); err != nil {
 			t.Fatalf("direnv export bash failed: %v", err)
 		}
 		if !strings.Contains(shellOut.String(), "export DIRENV_KEY='ok'") {
@@ -742,229 +796,5 @@ func TestRun_DeleteSharedAllDeclineSkipsPasswordThroughCobra(t *testing.T) {
 	}
 	if got := valueAtScope(t, opts, "REPO_KEY"); got != "repo" {
 		t.Fatalf("REPO_KEY=%q", got)
-	}
-}
-
-func TestCobraMoveCommands(t *testing.T) {
-	withFakeSessionStore(t)
-
-	opts := setupUnlockedForSet(t)
-	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
-	if err := Run(append(base, "set", "MOVE_LOCAL=local"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("set local failed: %v", err)
-	}
-
-	var out bytes.Buffer
-	if err := Run(append(base, "move", "local-to-shared", "MOVE_LOCAL", "--yes"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("local-to-shared failed: %v", err)
-	}
-	if got := valueAtShared(t, opts, "MOVE_LOCAL"); got != "local" {
-		t.Fatalf("shared MOVE_LOCAL=%q", got)
-	}
-
-	out.Reset()
-	if err := Run(append(base, "move", "shared-to-local", "MOVE_LOCAL", "-y"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("shared-to-local failed: %v", err)
-	}
-	if got := valueAtScope(t, opts, "MOVE_LOCAL"); got != "local" {
-		t.Fatalf("local MOVE_LOCAL=%q", got)
-	}
-	vd := loadVaultForMoveTest(t, opts)
-	if _, ok := vd.Shared["MOVE_LOCAL"]; ok {
-		t.Fatal("expected shared source to be deleted")
-	}
-}
-
-func TestCobraCopyCommands(t *testing.T) {
-	withFakeSessionStore(t)
-
-	opts := setupUnlockedForSet(t)
-	sourcePath := filepath.Join(t.TempDir(), "source")
-	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
-	if err := Run(append([]string{"--kinko-dir", opts.dataDir, "--path", sourcePath, "--profile", opts.profile}, "set", "COPY_LOCAL=local"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("set source local failed: %v", err)
-	}
-
-	var out bytes.Buffer
-	if err := Run(append(base, "copy", "local-to-local", "COPY_LOCAL", "--from-path", sourcePath), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("local-to-local copy failed: %v", err)
-	}
-	if got := valueAtScope(t, opts, "COPY_LOCAL"); got != "local" {
-		t.Fatalf("local COPY_LOCAL=%q", got)
-	}
-
-	out.Reset()
-	if err := Run(append(base, "copy", "local-to-shared", "COPY_LOCAL"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("local-to-shared copy failed: %v", err)
-	}
-	if got := valueAtShared(t, opts, "COPY_LOCAL"); got != "local" {
-		t.Fatalf("shared COPY_LOCAL=%q", got)
-	}
-
-	destinationPath := filepath.Join(t.TempDir(), "destination")
-	out.Reset()
-	destinationBase := []string{"--kinko-dir", opts.dataDir, "--path", destinationPath, "--profile", opts.profile}
-	if err := Run(append(destinationBase, "copy", "shared-to-local", "COPY_LOCAL"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("shared-to-local copy failed: %v", err)
-	}
-	destinationOpts := opts
-	destinationOpts.path = filepath.Clean(destinationPath)
-	if got := valueAtScope(t, destinationOpts, "COPY_LOCAL"); got != "local" {
-		t.Fatalf("destination COPY_LOCAL=%q", got)
-	}
-}
-
-func TestCobraCopyHelpIncludesDirections(t *testing.T) {
-	var out bytes.Buffer
-	if err := Run([]string{"copy", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := out.String()
-	for _, want := range []string{"local-to-local", "local-to-shared", "shared-to-local"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("copy help missing %s: %q", want, got)
-		}
-	}
-}
-
-func TestCobraMoveHelpIncludesDirections(t *testing.T) {
-	var out bytes.Buffer
-	if err := Run([]string{"move", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := out.String()
-	if !strings.Contains(got, "local-to-shared") || !strings.Contains(got, "shared-to-local") {
-		t.Fatalf("move help missing directions: %q", got)
-	}
-}
-
-func TestCobraMoveRejectsInvalidArgs(t *testing.T) {
-	withFakeSessionStore(t)
-
-	opts := setupUnlockedForSet(t)
-	base := []string{"--kinko-dir", opts.dataDir, "--path", opts.path, "--profile", opts.profile}
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{name: "parent positional", args: append(base, "move", "NOPE")},
-		{name: "missing key", args: append(base, "move", "local-to-shared")},
-		{name: "extra key", args: append(base, "move", "shared-to-local", "A", "B")},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := Run(tc.args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-			if err == nil {
-				t.Fatal("expected invalid args error")
-			}
-		})
-	}
-}
-
-func TestRun_CobraHelpIncludesProfileCommand(t *testing.T) {
-	var out bytes.Buffer
-	if err := Run([]string{"--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(out.String(), "profile") {
-		t.Fatalf("root help missing profile command: %q", out.String())
-	}
-}
-
-func TestRun_CobraHelpForProfileShowsList(t *testing.T) {
-	var out bytes.Buffer
-	if err := Run([]string{"profile", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(out.String(), "list") {
-		t.Fatalf("profile help missing list subcommand: %q", out.String())
-	}
-}
-
-func TestRun_CobraHelpDoesNotExposeImplicitCompletion(t *testing.T) {
-	var out bytes.Buffer
-	if err := Run([]string{"--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if strings.Contains(out.String(), "completion") {
-		t.Fatalf("root help should not expose Cobra default completion command: %q", out.String())
-	}
-}
-
-func TestRun_CobraFolderUnlockHelpHidesCompatibilityHoldFlag(t *testing.T) {
-	var out bytes.Buffer
-	if err := Run([]string{"folder", "unlock", "--help"}, strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := out.String()
-	if strings.Contains(got, "--hold") {
-		t.Fatalf("folder unlock help should not expose compatibility --hold flag: %q", got)
-	}
-	if !strings.Contains(got, "Usage:") || !strings.Contains(got, "unlock NAME") {
-		t.Fatalf("unexpected folder unlock help output: %q", got)
-	}
-}
-
-func TestRun_CobraFolderRemoveWiring(t *testing.T) {
-	withFakeSessionStore(t)
-	fake := withFakeFolderBackend(t)
-	opts := setupUnlockedForSet(t)
-	opts.path = t.TempDir()
-	configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
-	base := []string{"--kinko-dir", opts.dataDir, "--config", configPath, "--path", opts.path, "--profile", opts.profile}
-	if err := Run(append(base, "folder", "add", "private"), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("folder add failed: %v", err)
-	}
-
-	var out bytes.Buffer
-	if err := Run(append(base, "folder", "remove", "private", "--yes"), strings.NewReader(""), &out, &bytes.Buffer{}); err != nil {
-		t.Fatalf("folder remove failed: %v", err)
-	}
-	if got := out.String(); got != "folder removed: private\n" {
-		t.Fatalf("unexpected remove output: %q", got)
-	}
-	if _, mounts, _ := fake.counts(); mounts != 0 {
-		t.Fatalf("folder remove must not mount, mounts=%d", mounts)
-	}
-}
-
-func TestRun_CobraRejectsImplicitCompletionCommand(t *testing.T) {
-	err := Run([]string{"completion"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil {
-		t.Fatal("expected unsupported command error")
-	}
-}
-
-func TestRun_CobraRejectsUnknownRootSubcommand(t *testing.T) {
-	err := Run([]string{"frob"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil {
-		t.Fatal("expected unsupported command error")
-	}
-}
-
-func TestRun_CobraRejectsUnknownNestedSubcommand(t *testing.T) {
-	err := Run([]string{"profile", "frob"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil {
-		t.Fatal("expected unsupported nested command error")
-	}
-}
-
-func TestRun_NoArgs_ShowsCobraHelp(t *testing.T) {
-	var out bytes.Buffer
-	var errBuf bytes.Buffer
-
-	if err := Run(nil, strings.NewReader(""), &out, &errBuf); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	got := out.String()
-	if !strings.Contains(got, "Usage:") {
-		t.Fatalf("expected Cobra usage output, got: %q", got)
-	}
-	if !strings.Contains(got, "Available Commands:") {
-		t.Fatalf("expected Cobra command list, got: %q", got)
-	}
-	if strings.Contains(got, "Use: kinko <subcommand>") {
-		t.Fatalf("legacy no-command hint should not be shown, got: %q", got)
 	}
 }
