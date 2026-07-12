@@ -43,7 +43,13 @@ func diagnoseSessionToken(dataDir string, meta *vaultMeta) []string {
 	tokenPath := filepath.Join(dataDir, "lock", "session.token")
 	b, err := os.ReadFile(tokenPath)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		// Any other read failure (permission denied, I/O error, path is a
+		// directory, etc.) must be surfaced rather than silently treated
+		// as "no token present" -- hiding it would mask real problems.
+		return []string{fmt.Sprintf("WARNING session-token: session token could not be read: %v", err)}
 	}
 	var sf sessionFile
 	if err := json.Unmarshal(b, &sf); err != nil {

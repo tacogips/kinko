@@ -62,7 +62,7 @@ func unlockSession(dataDir string, timeout time.Duration, secret string) error {
 		}
 		return fmt.Errorf("unwrap data key: %w", err)
 	}
-	meta, _, err = migrateLegacySessionKey(dataDir, meta, dek)
+	meta, err = migrateLegacySessionKeyLocked(dataDir, meta, dek)
 	if err != nil {
 		return fmt.Errorf("migrate session key metadata: %w", err)
 	}
@@ -99,6 +99,41 @@ func unlockSession(dataDir string, timeout time.Duration, secret string) error {
 		return err
 	}
 	return write0600Atomically(filepath.Join(dataDir, "lock", "session.token"), b)
+}
+
+// migrateLegacySessionKeyLocked performs the legacy-session-key migration
+// (if needed) while holding the vault mutation lock, so it cannot race a
+// concurrent password change writing new metadata. To avoid adding lock
+// contention/latency to the common unlock path, the mutation lock is only
+// acquired when migration actually appears necessary: normal unlocks (no
+// migration needed) never touch the lock at all.
+//
+// Because acquiring the lock can itself take time (another mutation may be
+// in flight, e.g. a password change), metadata is re-loaded and
+// re-checked for staleness after the lock is held: another process or
+// goroutine may have already completed the migration -- or the metadata
+// may have moved on entirely, e.g. due to a concurrent password change --
+// while this call was waiting for the lock.
+func migrateLegacySessionKeyLocked(dataDir string, meta *vaultMeta, dek []byte) (*vaultMeta, error) {
+	if !usesLegacyPasswordDerivedSessionKey(meta) {
+		return meta, nil
+	}
+
+	release, err := acquireMutationLock(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("acquire mutation lock for legacy session key migration: %w", err)
+	}
+	defer release()
+
+	current, err := loadMeta(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("reload meta under mutation lock: %w", err)
+	}
+	migrated, _, err := migrateLegacySessionKey(dataDir, current, dek)
+	if err != nil {
+		return nil, err
+	}
+	return migrated, nil
 }
 
 func lockSession(dataDir string) error {

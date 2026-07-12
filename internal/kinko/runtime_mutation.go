@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// maxSetAssignmentLineSize is the maximum single-line size accepted when
+// reading KEY=VALUE assignments from stdin. This is larger than the
+// bufio.Scanner default (bufio.MaxScanTokenSize, 64 KiB) so that reasonably
+// large secret values do not fail with a confusing "token too long" error.
+const maxSetAssignmentLineSize = 4 * 1024 * 1024
+
 func runSet(opts globalOptions, args []string, stdin io.Reader, stdout io.Writer) error {
 	setOpts, err := parseSetOptions(args)
 	if err != nil {
@@ -76,7 +82,7 @@ func runSetWithOptions(opts globalOptions, setOpts setOptions, stdin io.Reader, 
 	}
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
-		return fmt.Errorf("vault mutation in progress: %w", err)
+		return newCLIError(exitCodeLockConflict, "Vault mutation in progress.", err)
 	}
 	defer release()
 	dek, err := loadUnlockedDEK(opts.dataDir)
@@ -201,6 +207,7 @@ func parseSetAssignment(raw string) (string, string, error) {
 
 func parseSetAssignmentsFromReader(r io.Reader) ([]setAssignment, error) {
 	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), maxSetAssignmentLineSize)
 	out := []setAssignment{}
 	lineNo := 0
 	for sc.Scan() {
@@ -216,6 +223,9 @@ func parseSetAssignmentsFromReader(r io.Reader) ([]setAssignment, error) {
 		out = append(out, setAssignment{key: k, value: v})
 	}
 	if err := sc.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return nil, fmt.Errorf("set: input line exceeds maximum size of %d bytes (line %d): %w", maxSetAssignmentLineSize, lineNo+1, err)
+		}
 		return nil, err
 	}
 	return out, nil
@@ -271,26 +281,18 @@ func runDeleteWithOptions(opts globalOptions, deleteOpts deleteOptions, stdin io
 			}
 		}
 	}
-	release, err := acquireMutationLock(opts.dataDir)
-	if err != nil {
-		return newCLIError(exitCodeLockConflict, "Vault mutation in progress.", err)
-	}
-	defer release()
-	dek, err := loadUnlockedDEK(opts.dataDir)
-	if err != nil {
-		return err
-	}
-	vd, err := loadVault(opts.dataDir, dek)
+
+	// Load vault state without holding the mutation lock (Finding 3): this
+	// lets us compute the preview (target scope/keys) shown before any
+	// blocking confirmation prompt without blocking concurrent mutators
+	// while waiting on user input.
+	_, previewVD, err := loadUnlockedVaultForDelete(opts)
 	if err != nil {
 		return newCLIError(exitCodeIOFailed, "Failed to load vault.", err)
 	}
+
 	if deleteOpts.deleteAll {
-		scope := map[string]string{}
-		if deleteOpts.shared {
-			scope = vd.Shared
-		} else if vd.Profiles[opts.profile] != nil && vd.Profiles[opts.profile][opts.path] != nil {
-			scope = vd.Profiles[opts.profile][opts.path]
-		}
+		scope := deleteAllScope(previewVD, opts, deleteOpts)
 		if len(scope) == 0 {
 			if deleteOpts.shared {
 				return errors.New("no secrets found in shared scope")
@@ -323,6 +325,26 @@ func runDeleteWithOptions(opts globalOptions, deleteOpts deleteOptions, stdin io
 				return newCLIError(exitCodeAuthFailed, err.Error(), err)
 			}
 		}
+
+		release, err := acquireMutationLock(opts.dataDir)
+		if err != nil {
+			return newCLIError(exitCodeLockConflict, "Vault mutation in progress.", err)
+		}
+		defer release()
+
+		// Re-load fresh under the lock and re-validate: a concurrent
+		// mutator may have changed the scope while the prompt/password
+		// verification was in progress. Do not blindly wipe a scope that
+		// was already emptied/changed by someone else without telling the
+		// user.
+		dek, vd, err := loadUnlockedVaultForDelete(opts)
+		if err != nil {
+			return newCLIError(exitCodeIOFailed, "Failed to load vault.", err)
+		}
+		scope = deleteAllScope(vd, opts, deleteOpts)
+		if len(scope) == 0 {
+			return errors.New("delete aborted: scope was emptied concurrently since confirmation, please retry")
+		}
 		if deleteOpts.shared {
 			vd.Shared = map[string]string{}
 		} else {
@@ -334,30 +356,13 @@ func runDeleteWithOptions(opts globalOptions, deleteOpts deleteOptions, stdin io
 		_, _ = fmt.Fprintln(stdout, "deleted all")
 		return nil
 	}
+
 	key := deleteOpts.key
 	if err := validateEnvKey(key); err != nil {
 		return err
 	}
-	if deleteOpts.shared {
-		if vd.Shared == nil {
-			return errors.New("secret not found")
-		}
-		if _, ok := vd.Shared[key]; !ok {
-			return errors.New("secret not found")
-		}
-	} else {
-		if vd.Profiles[opts.profile] == nil || vd.Profiles[opts.profile][opts.path] == nil {
-			if _, ok := vd.Shared[key]; ok {
-				return fmt.Errorf("secret not found in current profile/path scope; key %q exists in shared scope (use --shared)", key)
-			}
-			return errors.New("secret not found")
-		}
-		if _, ok := vd.Profiles[opts.profile][opts.path][key]; !ok {
-			if _, ok := vd.Shared[key]; ok {
-				return fmt.Errorf("secret not found in current profile/path scope; key %q exists in shared scope (use --shared)", key)
-			}
-			return errors.New("secret not found")
-		}
+	if err := checkDeleteKeyExists(previewVD, opts, deleteOpts, key); err != nil {
+		return err
 	}
 	if !deleteOpts.autoYes {
 		ok, err := confirmPrompt(stdin, stderr, fmt.Sprintf("Delete key %q? [y/N]: ", key))
@@ -369,6 +374,24 @@ func runDeleteWithOptions(opts globalOptions, deleteOpts deleteOptions, stdin io
 			return nil
 		}
 	}
+
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		return newCLIError(exitCodeLockConflict, "Vault mutation in progress.", err)
+	}
+	defer release()
+
+	// Re-load fresh under the lock and re-check the key still exists in
+	// the expected scope before deleting it: if it was deleted by a
+	// concurrent process in the meantime, fail clearly rather than
+	// silently succeeding or silently no-op'ing.
+	dek, vd, err := loadUnlockedVaultForDelete(opts)
+	if err != nil {
+		return newCLIError(exitCodeIOFailed, "Failed to load vault.", err)
+	}
+	if err := checkDeleteKeyExists(vd, opts, deleteOpts, key); err != nil {
+		return fmt.Errorf("key no longer exists (deleted concurrently), delete aborted: %w", err)
+	}
 	if deleteOpts.shared {
 		delete(vd.Shared, key)
 	} else {
@@ -378,6 +401,53 @@ func runDeleteWithOptions(opts globalOptions, deleteOpts deleteOptions, stdin io
 		return newCLIError(exitCodeIOFailed, "Failed to save vault.", err)
 	}
 	_, _ = fmt.Fprintln(stdout, "deleted")
+	return nil
+}
+
+func loadUnlockedVaultForDelete(opts globalOptions) ([]byte, *vaultData, error) {
+	dek, err := loadUnlockedDEK(opts.dataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	vd, err := loadVault(opts.dataDir, dek)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dek, vd, nil
+}
+
+func deleteAllScope(vd *vaultData, opts globalOptions, deleteOpts deleteOptions) map[string]string {
+	if deleteOpts.shared {
+		return vd.Shared
+	}
+	if vd.Profiles[opts.profile] != nil && vd.Profiles[opts.profile][opts.path] != nil {
+		return vd.Profiles[opts.profile][opts.path]
+	}
+	return map[string]string{}
+}
+
+func checkDeleteKeyExists(vd *vaultData, opts globalOptions, deleteOpts deleteOptions, key string) error {
+	if deleteOpts.shared {
+		if vd.Shared == nil {
+			return errors.New("secret not found")
+		}
+		if _, ok := vd.Shared[key]; !ok {
+			return errors.New("secret not found")
+		}
+		return nil
+	}
+	if vd.Profiles[opts.profile] == nil || vd.Profiles[opts.profile][opts.path] == nil {
+		if _, ok := vd.Shared[key]; ok {
+			return fmt.Errorf("secret not found in current profile/path scope; key %q exists in shared scope (use --shared)", key)
+		}
+		return errors.New("secret not found")
+	}
+	if _, ok := vd.Profiles[opts.profile][opts.path][key]; !ok {
+		if _, ok := vd.Shared[key]; ok {
+			return fmt.Errorf("secret not found in current profile/path scope; key %q exists in shared scope (use --shared)", key)
+		}
+		return errors.New("secret not found")
+	}
 	return nil
 }
 

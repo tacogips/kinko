@@ -46,7 +46,7 @@ func runCopyWithOptions(opts globalOptions, copyOpts copySecretOptions, stdout i
 	}
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
-		return fmt.Errorf("vault mutation in progress: %w", err)
+		return newCLIError(exitCodeLockConflict, "Vault mutation in progress.", err)
 	}
 	defer release()
 

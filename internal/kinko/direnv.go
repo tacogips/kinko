@@ -14,7 +14,12 @@ func runDirenvExport(opts globalOptions, args []string, stdin io.Reader, stdout,
 	if err != nil {
 		return err
 	}
-	return runDirenvExportWithOptions(opts, exportOpts, stdin, stdout, stderr)
+	// pathExplicit defaults to false here because this entrypoint is used
+	// directly (e.g. by tests and any non-cobra caller) with no notion of
+	// whether a --path flag was explicitly set by a user at the cobra
+	// layer. This preserves the existing DIRENV_DIR-wins-by-default
+	// behavior for direct callers of runDirenvExport.
+	return runDirenvExportWithOptions(opts, exportOpts, stdin, stdout, stderr, false)
 }
 
 func parseDirenvExportOptions(args []string) (exportOptions, error) {
@@ -47,11 +52,11 @@ func parseDirenvExportOptions(args []string) (exportOptions, error) {
 	return exportOpts, nil
 }
 
-func runDirenvExportWithOptions(opts globalOptions, exportOpts exportOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+func runDirenvExportWithOptions(opts globalOptions, exportOpts exportOptions, stdin io.Reader, stdout, stderr io.Writer, pathExplicit bool) error {
 	if strings.TrimSpace(exportOpts.shell) == "" {
 		return errors.New("shell name must not be empty")
 	}
-	scopePath := resolveDirenvScope(opts.path, os.Getenv("DIRENV_DIR"))
+	scopePath := resolveDirenvScope(opts.path, os.Getenv("DIRENV_DIR"), pathExplicit)
 	nonInteractive := opts
 	nonInteractive.path = scopePath
 	nonInteractive.force = true
@@ -59,7 +64,16 @@ func runDirenvExportWithOptions(opts globalOptions, exportOpts exportOptions, st
 	return runExportWithOptions(nonInteractive, exportOpts, stdin, stdout, stderr)
 }
 
-func resolveDirenvScope(fallbackPath, direnvDir string) string {
+// resolveDirenvScope determines which path scope direnv export should use.
+// When pathExplicit is true, the user explicitly passed --path on the
+// command line, so that value always wins and DIRENV_DIR is ignored
+// entirely. When pathExplicit is false (the default, e.g. --path was not
+// passed and only derives from cwd/KINKO_PATH), DIRENV_DIR is preferred
+// when it resolves to a valid file or directory, preserving prior behavior.
+func resolveDirenvScope(fallbackPath, direnvDir string, pathExplicit bool) string {
+	if pathExplicit {
+		return fallbackPath
+	}
 	raw := strings.TrimSpace(direnvDir)
 	if raw == "" {
 		return fallbackPath

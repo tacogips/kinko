@@ -53,6 +53,9 @@ func runInit(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 	if isInitializedDataDir(opts.dataDir) {
 		return fmt.Errorf("kinko is already initialized in %s", opts.dataDir)
 	}
+	if anyVaultArtifact(opts.dataDir) {
+		return fmt.Errorf("data dir %s contains partial or complete vault data; move it aside or run 'kinko %s' first", opts.dataDir, cmdExplosion)
+	}
 
 	preflightMode := opts.keychainPreflight
 	if preflightMode == "" {
@@ -265,6 +268,19 @@ func isInitializedDataDir(dataDir string) bool {
 	vault := filepath.Join(dataDir, "vault", "vault.v1.bin")
 	config := filepath.Join(dataDir, "vault", "config.v1.bin")
 	return fileExists(meta) && fileExists(vault) && fileExists(config)
+}
+
+// anyVaultArtifact reports whether any vault artifact (complete or partial)
+// exists under dataDir. Unlike isInitializedDataDir, which requires every
+// artifact to be present, this treats a single surviving artifact as a
+// signal that the data dir already holds vault state and must not be
+// silently overwritten by init.
+func anyVaultArtifact(dataDir string) bool {
+	meta := filepath.Join(dataDir, "vault", "meta.v1.json")
+	vault := filepath.Join(dataDir, "vault", "vault.v1.bin")
+	config := filepath.Join(dataDir, "vault", "config.v1.bin")
+	marker := filepath.Join(dataDir, "vault", vaultMarker)
+	return fileExists(meta) || fileExists(vault) || fileExists(config) || fileExists(marker)
 }
 
 func envOrDefault(key, fallback string) string {

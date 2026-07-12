@@ -22,9 +22,24 @@ func readPasswordBytesFromFD(fd int, timeout time.Duration, maxBytes int) ([]byt
 	}
 	defer file.Close()
 
+	// unix.SetNonblock operates via fcntl(F_SETFL), which changes flags on
+	// the underlying shared open file description, not just this fd number.
+	// That means it also flips O_NONBLOCK on the caller's original fd (e.g.
+	// their stdin), which would otherwise remain non-blocking after this
+	// process exits and break the calling shell/terminal. Capture the
+	// original flags before changing them and restore them via F_SETFL
+	// once we're done, on every exit path.
+	origFlags, err := unix.FcntlInt(uintptr(dupFD), unix.F_GETFL, 0)
+	if err != nil {
+		return nil, fmt.Errorf("get fd flags: %w", err)
+	}
 	if err := unix.SetNonblock(dupFD, true); err != nil {
 		return nil, fmt.Errorf("set nonblock on fd: %w", err)
 	}
+	defer func() {
+		_, _ = unix.FcntlInt(uintptr(dupFD), unix.F_SETFL, origFlags)
+	}()
+
 	deadline := time.Now().Add(timeout)
 	return readFDWithTimeout(dupFD, deadline, timeout, maxBytes)
 }

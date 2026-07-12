@@ -294,3 +294,90 @@ func TestParseHdiutilInfoMountedAcceptsLabeledMountpointWithColon(t *testing.T) 
 		t.Fatal("labeled exact mountpoint containing colon was not reported as mounted")
 	}
 }
+
+// TestParseHdiutilInfoPlistMountedResolvesSymlinkedMountpoint reproduces the
+// macOS /tmp -> /private/tmp style mismatch: hdiutil reports the resolved,
+// canonical mount-point path while callers may pass a mountpoint that is
+// itself (or is under) a symlink alias. Before symlink canonicalization was
+// added, this comparison used filepath.Clean only and so treated the two
+// paths as different, which could make `folder lock` report a live mount as
+// already "locked" without unmounting it, and let `folder remove --yes`
+// delete a live-attached sparsebundle's storage.
+func TestParseHdiutilInfoPlistMountedResolvesSymlinkedMountpoint(t *testing.T) {
+	realDir := t.TempDir()
+	realTarget, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasParent := t.TempDir()
+	alias := filepath.Join(aliasParent, "alias")
+	if err := os.Symlink(realTarget, alias); err != nil {
+		t.Fatal(err)
+	}
+	mountpoint := filepath.Join(alias, "private")
+	resolvedMountpoint := filepath.Join(realTarget, "private")
+	if err := os.MkdirAll(resolvedMountpoint, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// hdiutil reports the resolved (non-symlinked) mount-point, but the
+	// caller-supplied mountpoint still names the symlinked alias.
+	info := []byte(`<plist><dict><key>mount-point</key><string>` + resolvedMountpoint + `</string></dict></plist>`)
+	mounted, err := parseHdiutilInfoPlistMounted(info, mountpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mounted {
+		t.Fatal("expected symlinked mountpoint alias to resolve to the same canonical path as hdiutil's resolved mount-point")
+	}
+
+	// And the reverse direction: hdiutil reports the alias path while the
+	// caller passes the already-resolved path.
+	infoAlias := []byte(`<plist><dict><key>mount-point</key><string>` + mountpoint + `</string></dict></plist>`)
+	mountedReverse, err := parseHdiutilInfoPlistMounted(infoAlias, resolvedMountpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mountedReverse {
+		t.Fatal("expected resolved mountpoint to resolve to the same canonical path as hdiutil's aliased mount-point")
+	}
+}
+
+func TestParseHdiutilInfoPlistMountedFallsBackToCleanPathWhenUnresolvable(t *testing.T) {
+	// Neither side exists on disk, so EvalSymlinks cannot resolve either
+	// path; comparison must fall back to the cleaned path rather than
+	// erroring out.
+	missing := filepath.Join(t.TempDir(), "does-not-exist", "private")
+	info := []byte(`<plist><dict><key>mount-point</key><string>` + missing + `/</string></dict></plist>`)
+	mounted, err := parseHdiutilInfoPlistMounted(info, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mounted {
+		t.Fatal("expected unresolvable paths to fall back to cleaned-path comparison")
+	}
+}
+
+func TestCanonicalizeMountpointForComparisonResolvesSymlinks(t *testing.T) {
+	realDir := t.TempDir()
+	realTarget, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasParent := t.TempDir()
+	alias := filepath.Join(aliasParent, "alias")
+	if err := os.Symlink(realTarget, alias); err != nil {
+		t.Fatal(err)
+	}
+	if got := canonicalizeMountpointForComparison(alias); got != realTarget {
+		t.Fatalf("canonicalizeMountpointForComparison(%q)=%q want %q", alias, got, realTarget)
+	}
+}
+
+func TestCanonicalizeMountpointForComparisonFallsBackWhenMissing(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing", "path") + "/"
+	want := filepath.Clean(missing)
+	if got := canonicalizeMountpointForComparison(missing); got != want {
+		t.Fatalf("canonicalizeMountpointForComparison(%q)=%q want %q", missing, got, want)
+	}
+}

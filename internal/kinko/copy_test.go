@@ -233,3 +233,30 @@ func loadVaultForCopyTest(t *testing.T, opts globalOptions) *vaultData {
 	}
 	return vd
 }
+
+// TestRunCopy_MutationLockConflictExitCode is a Finding 6 regression test
+// proving `kinko copy` reports exitCodeLockConflict via newCLIError rather
+// than a plain, unclassified error when the mutation lock is already held
+// by a concurrent operation.
+func TestRunCopy_MutationLockConflictExitCode(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var out bytes.Buffer
+	if err := runSet(opts, []string{"--shared", "A=1"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	out.Reset()
+	err = runCopy(opts, []string{"shared-to-local", "A"}, &out)
+	if err == nil {
+		t.Fatal("expected lock conflict error")
+	}
+	if code := ExitCode(err); code != exitCodeLockConflict {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeLockConflict)
+	}
+}

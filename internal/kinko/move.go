@@ -40,23 +40,20 @@ func runMoveWithOptions(opts globalOptions, moveOpts moveSecretOptions, stdin io
 	if err := validateMoveOptions(moveOpts); err != nil {
 		return err
 	}
-	release, err := acquireMutationLock(opts.dataDir)
-	if err != nil {
-		return fmt.Errorf("vault mutation in progress: %w", err)
-	}
-	defer release()
 
-	dek, err := loadUnlockedDEK(opts.dataDir)
-	if err != nil {
-		return err
-	}
-	vd, err := loadVault(opts.dataDir, dek)
+	// Load vault state without holding the mutation lock so the preview
+	// (source/destination description, existence/conflict check) can be
+	// shown to the user before any blocking confirmation prompt (Finding
+	// 3). Holding the lock across an interactive prompt would otherwise
+	// block every other mutating command indefinitely while waiting on
+	// user input.
+	dek, vd, err := loadUnlockedVaultForMove(opts)
 	if err != nil {
 		return err
 	}
 
 	source, destination := describeMoveScopes(opts, moveOpts.Direction)
-	result, value, err := prepareMoveSecret(vd, opts, moveOpts)
+	result, _, err := prepareMoveSecret(vd, opts, moveOpts)
 	if err != nil {
 		return err
 	}
@@ -71,6 +68,24 @@ func runMoveWithOptions(opts globalOptions, moveOpts moveSecretOptions, stdin io
 		}
 	}
 
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		return newCLIError(exitCodeLockConflict, "Vault mutation in progress.", err)
+	}
+	defer release()
+
+	// Re-load vault state fresh under the lock and re-validate: another
+	// process may have mutated the vault while the confirmation prompt was
+	// open. Do not reuse the pre-lock snapshot for the actual mutation.
+	dek, vd, err = loadUnlockedVaultForMove(opts)
+	if err != nil {
+		return err
+	}
+	result, value, err := prepareMoveSecret(vd, opts, moveOpts)
+	if err != nil {
+		return fmt.Errorf("move aborted: source/destination state changed since confirmation, please retry: %w", err)
+	}
+
 	destinationScope := ensureMoveDestinationScope(vd, opts, moveOpts.Direction)
 	destinationScope[moveOpts.Key] = value
 	sourceScope := moveSourceScope(vd, opts, moveOpts.Direction)
@@ -80,6 +95,18 @@ func runMoveWithOptions(opts globalOptions, moveOpts moveSecretOptions, stdin io
 		return err
 	}
 	return renderMoveSecretSuccess(stdout, result, source, destination)
+}
+
+func loadUnlockedVaultForMove(opts globalOptions) ([]byte, *vaultData, error) {
+	dek, err := loadUnlockedDEK(opts.dataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	vd, err := loadVault(opts.dataDir, dek)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dek, vd, nil
 }
 
 func parseMoveArgs(args []string) (moveSecretOptions, error) {

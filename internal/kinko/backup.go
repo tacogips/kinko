@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -133,6 +134,13 @@ func runBackupWithOptions(opts globalOptions, backupOpts backupOptions, stdin io
 	entries, err := collectBackupArchiveEntries(opts)
 	if err != nil {
 		return newCLIError(exitCodeIOFailed, err.Error(), err)
+	}
+	// Lexical containment pre-check before MkdirAll so a rejected
+	// destination never leaves newly created directories inside the data
+	// dir; the symlink-resolved check below remains authoritative.
+	if isWithinBase(destDir, dataDirAbs) {
+		err := fmt.Errorf("destination directory must not be inside kinko data dir: %s", destDir)
+		return newCLIError(exitCodePolicyFailed, err.Error(), err)
 	}
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return newCLIError(exitCodeIOFailed, "Failed to create backup destination directory.", err)
@@ -424,25 +432,42 @@ func writePasswordLockedZip(path string, password string, entries []backupArchiv
 		}
 	}()
 
-	position := uint32(0)
+	// The writer has no ZIP64 path; refuse anything the classic 32-bit/
+	// 16-bit ZIP fields cannot represent instead of silently wrapping.
+	if len(entries) > 0xffff {
+		return fmt.Errorf("backup archive entry count %d exceeds zip limit", len(entries))
+	}
+	position := uint64(0)
 	centralDir := bytes.Buffer{}
 	for _, entry := range entries {
 		if err := validateBackupArchivePath(entry.name); err != nil {
 			return err
 		}
-		offset := position
+		if uint64(len(entry.data))+zipCryptoHeaderSize > math.MaxUint32 {
+			return fmt.Errorf("backup entry %s exceeds zip size limit", entry.name)
+		}
+		if position > math.MaxUint32 {
+			return fmt.Errorf("backup archive exceeds zip offset limit")
+		}
+		offset := uint32(position)
 		written, err := writePasswordLockedZipEntry(f, &centralDir, offset, password, entry)
 		if err != nil {
 			return err
 		}
-		position += written
+		position += uint64(written)
 	}
 
-	centralDirOffset := position
+	if position > math.MaxUint32 {
+		return fmt.Errorf("backup archive exceeds zip offset limit")
+	}
+	centralDirOffset := uint32(position)
 	if _, err := f.Write(centralDir.Bytes()); err != nil {
 		return fmt.Errorf("write central directory: %w", err)
 	}
-	position += uint32(centralDir.Len())
+	position += uint64(centralDir.Len())
+	if position > math.MaxUint32 {
+		return fmt.Errorf("backup archive exceeds zip size limit")
+	}
 
 	endRecord := make([]byte, 22)
 	binary.LittleEndian.PutUint32(endRecord[0:4], zipEndOfCentralDirSignature)
@@ -453,7 +478,7 @@ func writePasswordLockedZip(path string, password string, entries []backupArchiv
 	if _, err := f.Write(endRecord); err != nil {
 		return fmt.Errorf("write end of central directory: %w", err)
 	}
-	position += uint32(len(endRecord))
+	position += uint64(len(endRecord))
 
 	if err := f.Truncate(int64(position)); err != nil {
 		return fmt.Errorf("finalize backup archive: %w", err)

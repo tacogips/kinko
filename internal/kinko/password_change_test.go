@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -456,6 +457,92 @@ func TestAcquireMutationLock_CorruptLockBlocks(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), lockPath) || !strings.Contains(err.Error(), "remove it manually") {
 		t.Fatalf("unexpected corrupt lock error: %v", err)
+	}
+}
+
+// TestAcquireMutationLock_ConcurrentStaleTakeoverOnlyOneWinner simulates many
+// goroutines racing to take over the same stale lock concurrently. With the
+// old remove-then-recreate takeover, two racers could both decide the lock
+// is stale, both remove it (one removing the other's freshly-created live
+// lock), and both end up believing they hold the lock. The fixed-path
+// ".takeover" intent-mutex serializes the actual remove+recreate step, so
+// exactly one goroutine may hold the live lock at any instant. Since our
+// own successfully-created lock is never "stale" to our own subsequent
+// attempts (same PID, running), every other concurrent attempt must observe
+// a live conflict rather than also succeeding.
+func TestAcquireMutationLock_ConcurrentStaleTakeoverOnlyOneWinner(t *testing.T) {
+	opts := setupPasswordChangeFixture(t, "current-password-123")
+	lockPath := filepath.Join(opts.dataDir, "vault", mutationLockFileName)
+	metadata := mutationLockMetadata{
+		PID:       99999999,
+		Hostname:  mustHostname(t),
+		CreatedAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	}
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const attempts = 12
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var liveHolders int
+	var maxConcurrentHolders int
+	errs := make([]error, attempts)
+	wg.Add(attempts)
+	for i := 0; i < attempts; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			release, err := acquireMetadataLock(lockPath)
+			errs[i] = err
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			liveHolders++
+			if liveHolders > maxConcurrentHolders {
+				maxConcurrentHolders = liveHolders
+			}
+			mu.Unlock()
+			// Hold briefly so any other goroutine that incorrectly
+			// believes it also holds the lock would overlap here.
+			time.Sleep(5 * time.Millisecond)
+			mu.Lock()
+			liveHolders--
+			mu.Unlock()
+			release()
+		}()
+	}
+	wg.Wait()
+
+	if maxConcurrentHolders > 1 {
+		t.Fatalf("more than one goroutine held the lock simultaneously: max=%d", maxConcurrentHolders)
+	}
+	successCount := 0
+	for i := range attempts {
+		if errs[i] == nil {
+			successCount++
+		}
+	}
+	if successCount == 0 {
+		t.Fatal("expected at least one goroutine to acquire the lock")
+	}
+	if fileExists(lockPath) {
+		t.Fatal("lock file should be removed once all holders released")
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(lockPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), metadataLockTakeoverSuffix) {
+			t.Fatalf("leftover takeover intent file after resolution: %s", e.Name())
+		}
 	}
 }
 

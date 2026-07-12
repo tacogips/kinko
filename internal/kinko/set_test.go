@@ -2,6 +2,7 @@ package kinko
 
 import (
 	"bytes"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -628,5 +629,265 @@ func TestRunDelete_SharedKeyWithoutSharedFlagReturnsHint(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "use --shared") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// TestRunDelete_LockNotHeldDuringPrompt is a Finding 3 regression test
+// proving that runDeleteWithOptions (single-key path) does not hold the
+// mutation lock while blocked waiting on the interactive confirmation
+// prompt. stdin is an io.Pipe that is never written to until after the
+// test has proven the lock is free, so the delete call blocks on the
+// confirmation read; while blocked, the main test goroutine must be able
+// to acquire the mutation lock directly.
+func TestRunDelete_LockNotHeldDuringPrompt(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var setOut bytes.Buffer
+	if err := runSet(opts, []string{"A=1"}, strings.NewReader(""), &setOut); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		deleteOpts := deleteOptions{key: "A"}
+		done <- runDeleteWithOptions(opts, deleteOpts, pr, io.Discard, io.Discard)
+	}()
+
+	var release func()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := acquireMutationLock(opts.dataDir)
+		if err == nil {
+			release = r
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if release == nil {
+		t.Fatal("expected to acquire mutation lock while delete is blocked on confirmation prompt, but lock was held")
+	}
+	release()
+
+	if _, err := pw.Write([]byte("n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runDeleteWithOptions failed after decline: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDeleteWithOptions did not complete after prompt was answered")
+	}
+
+	if got := valueAtScope(t, opts, "A"); got != "1" {
+		t.Fatalf("declined delete must leave key unchanged, got %q", got)
+	}
+}
+
+// TestRunDelete_AllLockNotHeldDuringPrompt is the delete --all variant of
+// the Finding 3 lock-not-held-during-prompt regression test: it proves the
+// mutation lock is not held while blocked on the delete-all confirmation
+// prompt (which today runs before password verification).
+func TestRunDelete_AllLockNotHeldDuringPrompt(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var setOut bytes.Buffer
+	if err := runSet(opts, []string{"A=1", "B=2"}, strings.NewReader(""), &setOut); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		deleteOpts := deleteOptions{deleteAll: true}
+		done <- runDeleteWithOptions(opts, deleteOpts, pr, io.Discard, io.Discard)
+	}()
+
+	var release func()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := acquireMutationLock(opts.dataDir)
+		if err == nil {
+			release = r
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if release == nil {
+		t.Fatal("expected to acquire mutation lock while delete --all is blocked on confirmation prompt, but lock was held")
+	}
+	release()
+
+	if _, err := pw.Write([]byte("n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runDeleteWithOptions(--all) failed after decline: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDeleteWithOptions(--all) did not complete after prompt was answered")
+	}
+
+	if got := valueAtScope(t, opts, "A"); got != "1" {
+		t.Fatalf("declined delete --all must leave keys unchanged, got A=%q", got)
+	}
+}
+
+// TestRunDelete_RevalidatesUnderLockAfterConcurrentDeletion is a Finding 3
+// regression test for the re-validation-under-lock behavior on the
+// single-key delete path: if the key is deleted by a concurrent process
+// between the pre-lock preview and the post-lock re-load, delete must fail
+// with a distinct "deleted concurrently" error rather than silently
+// succeeding or silently no-op'ing.
+func TestRunDelete_RevalidatesUnderLockAfterConcurrentDeletion(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	var setOut bytes.Buffer
+	if err := runSet(opts, []string{"A=1"}, strings.NewReader(""), &setOut); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		deleteOpts := deleteOptions{key: "A"}
+		done <- runDeleteWithOptions(opts, deleteOpts, pr, io.Discard, io.Discard)
+	}()
+
+	var release func()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := acquireMutationLock(opts.dataDir)
+		if err == nil {
+			release = r
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if release == nil {
+		t.Fatal("expected to acquire mutation lock while delete is blocked on confirmation prompt")
+	}
+	release()
+
+	dek, err := loadUnlockedDEK(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vd, err := loadVault(opts.dataDir, dek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(vd.Profiles[opts.profile][opts.path], "A")
+	if err := saveVault(opts.dataDir, dek, vd); err != nil {
+		t.Fatalf("simulated concurrent delete failed: %v", err)
+	}
+
+	if _, err := pw.Write([]byte("y\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected delete to fail after concurrent deletion of the key")
+		}
+		if !strings.Contains(err.Error(), "deleted concurrently") {
+			t.Fatalf("expected a distinct concurrent-deletion error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDeleteWithOptions did not complete after prompt was answered")
+	}
+}
+
+// TestRunSet_MutationLockConflictExitCode is a Finding 6 regression test
+// proving `kinko set` reports exitCodeLockConflict via newCLIError rather
+// than a plain, unclassified error when the mutation lock is already held.
+func TestRunSet_MutationLockConflictExitCode(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+
+	release, err := acquireMutationLock(opts.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	var out bytes.Buffer
+	err = runSet(opts, []string{"A=1"}, strings.NewReader(""), &out)
+	if err == nil {
+		t.Fatal("expected lock conflict error")
+	}
+	if code := ExitCode(err); code != exitCodeLockConflict {
+		t.Fatalf("ExitCode(err)=%d want %d", code, exitCodeLockConflict)
+	}
+}
+
+// TestParseSetAssignmentsFromReader_LargeValueSucceeds is a Finding 7
+// regression test proving that a single KEY=VALUE line whose value is
+// larger than the bufio.Scanner default max token size (64 KiB) but well
+// under the new 4 MiB limit is parsed successfully instead of failing with
+// "bufio.Scanner: token too long".
+func TestParseSetAssignmentsFromReader_LargeValueSucceeds(t *testing.T) {
+	largeValue := strings.Repeat("x", 100*1024)
+	line := "BIGVALUE=" + largeValue + "\n"
+
+	assignments, err := parseSetAssignmentsFromReader(strings.NewReader(line))
+	if err != nil {
+		t.Fatalf("parseSetAssignmentsFromReader failed for a 100KiB value: %v", err)
+	}
+	if len(assignments) != 1 {
+		t.Fatalf("expected 1 assignment, got %d", len(assignments))
+	}
+	if assignments[0].key != "BIGVALUE" {
+		t.Fatalf("key=%q want BIGVALUE", assignments[0].key)
+	}
+	if assignments[0].value != largeValue {
+		t.Fatalf("value length=%d want %d (value must round-trip exactly)", len(assignments[0].value), len(largeValue))
+	}
+}
+
+// TestRunSet_LargeValueFromStdinRoundTrips is a Finding 7 regression test
+// exercising the same large-value scenario through the full runSet
+// pipeline (stdin -> vault -> read back), proving the fix is effective
+// end-to-end and not just at the parser layer.
+func TestRunSet_LargeValueFromStdinRoundTrips(t *testing.T) {
+	opts := setupUnlockedForSet(t)
+	largeValue := strings.Repeat("y", 100*1024)
+	in := strings.NewReader("BIGVALUE=" + largeValue + "\n")
+
+	var out bytes.Buffer
+	if err := runSet(opts, nil, in, &out); err != nil {
+		t.Fatalf("runSet failed for a 100KiB stdin value: %v", err)
+	}
+	if got := valueAtScope(t, opts, "BIGVALUE"); got != largeValue {
+		t.Fatalf("round-tripped value length=%d want %d", len(got), len(largeValue))
+	}
+}
+
+// TestParseSetAssignmentsFromReader_OverLimitValueFailsWithClearError is a
+// Finding 7 regression test proving that a line exceeding the new 4 MiB
+// limit still fails, but with a clear, actionable error message rather
+// than the raw generic bufio.Scanner error text.
+func TestParseSetAssignmentsFromReader_OverLimitValueFailsWithClearError(t *testing.T) {
+	oversizedValue := strings.Repeat("z", 4*1024*1024+100)
+	line := "TOOBIG=" + oversizedValue + "\n"
+
+	_, err := parseSetAssignmentsFromReader(strings.NewReader(line))
+	if err == nil {
+		t.Fatal("expected an error for a line exceeding the maximum size")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Fatalf("expected a clear size-limit error message, got: %v", err)
 	}
 }

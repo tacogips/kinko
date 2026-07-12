@@ -64,11 +64,21 @@ func TestParseImportAssignments_FishEscapes(t *testing.T) {
 
 func TestParseImportAssignments_FishRejectsInvalidEscapes(t *testing.T) {
 	cases := []struct {
-		name string
-		line string
+		name       string
+		line       string
+		wantReason string
 	}{
-		{name: "trailing backslash", line: `set -gx VALUE 'abc\';`},
-		{name: "unsupported escape", line: `set -gx VALUE 'abc\n';`},
+		// `'abc\';` is genuinely unbalanced fish quoting: `\'` is a
+		// supported escape for a literal embedded quote (not a
+		// terminator), so the quote never actually closes and the value is
+		// unterminated. Verified against real fish 4.5.0: `fish -c "set
+		// -gx VALUE 'abc\'; echo ok"` reports "Unexpected end of string,
+		// quotes are not balanced". quoteFish never emits a lone trailing
+		// backslash before the closing quote (it doubles backslashes), so
+		// this input only exercises the parser's rejection of malformed
+		// hand-crafted input, not a round-trip case.
+		{name: "trailing backslash", line: `set -gx VALUE 'abc\';`, wantReason: "unterminated quoted value"},
+		{name: "unsupported escape", line: `set -gx VALUE 'abc\n';`, wantReason: "unsupported escape sequence"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,7 +86,7 @@ func TestParseImportAssignments_FishRejectsInvalidEscapes(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected parse error")
 			}
-			if !strings.Contains(err.Error(), "unsupported escape sequence") {
+			if !strings.Contains(err.Error(), tc.wantReason) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})

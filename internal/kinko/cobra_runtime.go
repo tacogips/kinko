@@ -122,6 +122,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 			},
 		},
 		newBackupCommand(ctx, finalizeOnlyPreflight),
+		newRestoreCommand(ctx, finalizeOnlyPreflight),
 		newSetCommand(ctx, preflight),
 		newSetKeyCommand(ctx, preflight),
 		newDeleteCommand(ctx, preflight),
@@ -146,7 +147,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 		newFolderCommand(ctx, preflight),
 		newProfileCommand(ctx, preflight),
 		newPathCommand(ctx, preflight),
-		newDirenvCommand(ctx, preflight),
+		newDirenvCommand(ctx, preflight, func() bool { return root.PersistentFlags().Changed("path") }),
 		newPasswordCommand(ctx, preflight),
 		newDoctorCommand(ctx, finalizeOnlyPreflight),
 	)
@@ -202,6 +203,38 @@ func newBackupCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 	cmd.Flags().BoolVar(&forceTTY, "force-tty", false, "allow interactive prompts with redirected stdin")
 	cmd.Flags().IntVar(&currentFD, "current-fd", -1, "read current password from file descriptor")
 	cmd.Flags().StringVar(&destPath, "dest-path", ".", "destination directory for backup archive")
+	return cmd
+}
+
+func newRestoreCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+	currentStdin := false
+	forceTTY := false
+	currentFD := -1
+	includeBootstrap := false
+	cmd := &cobra.Command{
+		Use:   cmdRestore + " <archive>",
+		Short: "Restore a vault from a password-locked ZIP backup",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := preflight(); err != nil {
+				return err
+			}
+			restoreOpts := restoreOptions{
+				input: restoreInputOptions{
+					currentStdin: currentStdin,
+					currentFD:    currentFD,
+					forceTTY:     forceTTY,
+				},
+				archivePath:      args[0],
+				includeBootstrap: includeBootstrap,
+			}
+			return runRestoreWithOptions(ctx.opts, restoreOpts, ctx.stdin, ctx.stdout, ctx.stderr)
+		},
+	}
+	cmd.Flags().BoolVar(&currentStdin, "current-stdin", false, "read backup password from stdin")
+	cmd.Flags().BoolVar(&forceTTY, "force-tty", false, "allow interactive prompts with redirected stdin")
+	cmd.Flags().IntVar(&currentFD, "current-fd", -1, "read backup password from file descriptor")
+	cmd.Flags().BoolVar(&includeBootstrap, "include-bootstrap", false, "also restore the archived bootstrap config to the --config path")
 	return cmd
 }
 
@@ -755,6 +788,13 @@ func newExecCommand(ctx *runtimeContext, preflight func() error) *cobra.Command 
 	}
 	cmd.Flags().BoolVar(&includeAll, "all", false, "inject all resolved secrets")
 	cmd.Flags().StringVar(&env, "env", "", "comma-separated allowlist")
+	// Stop flag parsing at the first non-flag argument so that flag-like
+	// tokens belonging to the child command (e.g. `exec --env FOO node --env BAR`)
+	// are passed through as positional args instead of being reparsed as
+	// kinko flags. Without this, pflag's default interspersed parsing would
+	// scan the entire argument list for registered flags, allowing a child
+	// command's own flags to be misinterpreted as kinko flags.
+	cmd.Flags().SetInterspersed(false)
 	return cmd
 }
 
@@ -772,7 +812,7 @@ func newPasswordCommand(ctx *runtimeContext, preflight func() error) *cobra.Comm
 	return root
 }
 
-func newDirenvCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
+func newDirenvCommand(ctx *runtimeContext, preflight func() error, pathChanged func() bool) *cobra.Command {
 	root := &cobra.Command{
 		Use:   cmdDirenv,
 		Short: "direnv-focused helpers",
@@ -802,7 +842,8 @@ func newDirenvCommand(ctx *runtimeContext, preflight func() error) *cobra.Comman
 			if len(args) == 1 {
 				exportOpts.shell = args[0]
 			}
-			return runDirenvExportWithOptions(ctx.opts, exportOpts, ctx.stdin, ctx.stdout, ctx.stderr)
+			pathExplicit := pathChanged != nil && pathChanged()
+			return runDirenvExportWithOptions(ctx.opts, exportOpts, ctx.stdin, ctx.stdout, ctx.stderr, pathExplicit)
 		},
 	}
 	exportCmd.Flags().BoolVar(&withScopeComments, "with-scope-comments", true, "include scope comments")

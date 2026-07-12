@@ -107,6 +107,26 @@ func (b hdiutilFolderBackend) Status(ctx context.Context, _ FolderRecord, mountp
 	return FolderMountStatus{Mounted: false, Detail: "not mounted"}, nil
 }
 
+// canonicalizeMountpointForComparison resolves symlinks in path so mount
+// detection compares real, canonical filesystem locations rather than
+// symlinked aliases. macOS commonly symlinks directories such as /tmp to
+// /private/tmp; hdiutil reports the resolved /private/... path while a
+// caller-supplied mountpoint may still name the /tmp/... alias (or vice
+// versa). Comparing filepath.Clean output alone would treat these as
+// different paths and could report a live mount as "locked" (leaving it
+// attached) or cause a remove to os.RemoveAll a live-attached sparsebundle.
+// If the path does not exist or symlinks cannot be resolved, the cleaned
+// path is used as a fallback so an unmounted/nonexistent mountpoint still
+// compares sensibly.
+func canonicalizeMountpointForComparison(path string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return cleaned
+	}
+	return resolved
+}
+
 func (b hdiutilFolderBackend) imagePath(record FolderRecord) (string, error) {
 	dir, err := checkedFolderStorageDir(b.dataDir, record)
 	if err != nil {
@@ -158,7 +178,7 @@ func parseHdiutilInfoMounted(info []byte, mountpoint string) bool {
 }
 
 func parseHdiutilInfoPlistMounted(info []byte, mountpoint string) (bool, error) {
-	target := filepath.Clean(mountpoint)
+	target := canonicalizeMountpointForComparison(mountpoint)
 	decoder := xml.NewDecoder(bytes.NewReader(info))
 	expectMountPointValue := false
 	for {
@@ -187,7 +207,7 @@ func parseHdiutilInfoPlistMounted(info []byte, mountpoint string) (bool, error) 
 					return false, fmt.Errorf("parse hdiutil plist mount point: %w", err)
 				}
 				expectMountPointValue = false
-				if filepath.Clean(strings.TrimSpace(value)) == target {
+				if canonicalizeMountpointForComparison(value) == target {
 					return true, nil
 				}
 			default:
