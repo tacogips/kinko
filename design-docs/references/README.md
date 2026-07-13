@@ -19,6 +19,9 @@ This directory contains reference materials for system design and implementation
 | Apple Disk Utility disk images | https://support.apple.com/guide/disk-utility/create-a-disk-image-dskutl11888/mac | macOS encrypted disk image user-facing behavior reference |
 | Cryptomator | https://cryptomator.org/ | Comparable encrypted folder vault product |
 | VeraCrypt | https://veracrypt.io/ | Comparable encrypted volume/container product |
+| Bitwarden Secrets Manager CLI | https://bitwarden.com/help/secrets-manager-cli/ | `bws` command surface: auth, secret/project subcommands, `--output json`, run command |
+| Bitwarden Secrets Manager Overview | https://bitwarden.com/help/secrets-manager-overview/ | Concepts: organizations, projects, machine accounts, access tokens |
+| Bitwarden Access Tokens | https://bitwarden.com/help/access-tokens/ | Machine-account access token format, scoping, and rotation |
 
 ## Reference Documents
 

@@ -908,4 +908,17 @@ Current command-specific structured mappings:
 No additional command-specific structured mappings are currently planned for
 this P4 pass.
 
+## Planned Subcommands
+
+Designed but not yet implemented; sections above cover only shipped
+commands.
+
+- `kinko sync <push|pull> --provider=bws` and `kinko migration` — remote
+  synchronization with Bitwarden Secrets Manager, per-vault machine id, and
+  vault-metadata migration. Reserves exit codes `15` (sync conflict) and
+  `16` (provider failure). Detailed design:
+  `design-docs/specs/design-bws-sync.md` (implementation plans:
+  `impl-plans/active/bws-sync-foundation.md`,
+  `impl-plans/active/bws-sync-command.md`).
+
 ---

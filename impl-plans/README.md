@@ -39,6 +39,8 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
+| `bws-sync-foundation.md` | Ready | `design-docs/specs/design-bws-sync.md` | 2026-07-13 |
+| `bws-sync-command.md` | Planning (blocked on foundation) | `design-docs/specs/design-bws-sync.md` | 2026-07-13 |
 
 ## Completed Plans
 
