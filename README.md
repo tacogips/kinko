@@ -21,6 +21,46 @@
   and can always be manually locked.
 - Session wrap keys are stored in OS keychain backends (not in vault files).
 
+## Bitwarden Secrets Manager synchronization
+
+`kinko sync` synchronizes every profile, path scope, and the shared scope with
+one Bitwarden Secrets Manager project through the official `bws` CLI. Both
+directions require vault password re-entry and hold the vault mutation lock.
+
+```bash
+# Legacy vaults need a machine id once; new vaults receive one at init.
+kinko migration --yes
+
+# Supply the token for one invocation, or store KINKO_BWS_ACCESS_TOKEN as a
+# kinko shared secret. Configure a project once or pass --project-id.
+export KINKO_BWS_ACCESS_TOKEN="..."
+kinko config set sync.bws.project_id <project-id>
+kinko sync push --provider=bws
+kinko sync pull --provider=bws --dry-run
+kinko --force sync pull --provider=bws
+```
+
+Configuration and isolation:
+
+- `KINKO_BWS_ACCESS_TOKEN` overrides the shared secret with the same name.
+  The reserved shared key is never synchronized.
+- `KINKO_BWS_PROJECT_ID` overrides encrypted config; `--project-id` has the
+  highest priority. If neither is set, the sole accessible BWS project is used.
+- `KINKO_BWS_BIN` selects the `bws` executable for custom installations and
+  test harnesses.
+- A parent `BWS_ACCESS_TOKEN` is ignored. Only the resolved kinko token and a
+  minimal runtime environment reach the `bws` child process.
+- `--dry-run` lists value-free actions and changes neither local encrypted
+  files nor remote secrets. `--json` emits the same value-free plan/summary.
+- Divergence exits with code `15` without mutation. `--force` makes the
+  command's source side authoritative. Provider failures exit with code `16`.
+- Deletions propagate automatically when a prior sync baseline proves which
+  side deleted the entry; `path prune-missing` remains the separate path-scope
+  cleanup command, so sync has no `--prune` flag.
+- BWS requires create/edit values as direct argv elements. No shell is used,
+  but those values may be visible to same-machine process inspection while
+  the `bws` process is running.
+
 ## Design Rationale: Vault Files vs OS Keychain
 
 This section documents the storage design intentionally used by `kinko`.
@@ -685,6 +725,9 @@ kinko profile list
 kinko path prune-missing [--all-profiles] [--yes|-y] [--json]
 kinko config show|set <key> <value>
 kinko doctor
+kinko migration [--yes|-y] [--json]
+kinko sync push --provider=bws [--force] [--dry-run] [--project-id <id>] [--json]
+kinko sync pull --provider=bws [--force] [--dry-run] [--project-id <id>] [--json]
 kinko export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
 kinko direnv export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
 kinko import [shell] [--file <path>] [--yes|-y] [--confirm-with-values] [--allow-shared]

@@ -12,6 +12,8 @@ const (
 	exitCodeLockConflict    = 12
 	exitCodeIOFailed        = 13
 	exitCodeMetadataInvalid = 14
+	exitCodeSyncConflict    = 15
+	exitCodeProviderFailed  = 16
 )
 
 type cliError struct {

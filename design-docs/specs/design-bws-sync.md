@@ -209,7 +209,9 @@ stderr notice says the shared secret was ignored.
 The reserved key `KINKO_BWS_ACCESS_TOKEN` is excluded from sync in both
 directions: push never uploads it (storing the BWS access token inside BWS
 itself would be circular disclosure) and pull ignores a remote entry with
-that key name.
+that key name. Exclusion happens only after remote-name validation: duplicate
+machine-owned entries with this reserved name are still ambiguous and fail
+with a policy error, including when `--force` is set.
 
 Isolation rules:
 
@@ -435,13 +437,18 @@ scope in the vault (the directory itself is not required to exist on disk;
 - Calls used: `bws project list`, `bws secret list <project_id>` (one call
   supplies names, values, notes, and revision dates for the whole plan),
   `bws secret create <key> <value> <project_id> --note <json>`,
-  `bws secret edit <id> --value ... --note ...`, `bws secret delete <ids...>`.
+  `bws secret edit <id> --value ... --note ...`, and one
+  `bws secret delete <id>` call per secret. Individual delete calls provide
+  exact successful-prefix state when a later deletion fails.
   Secret values do appear in bws argv (create/edit take them positionally);
   this is a bws CLI limitation, is local to the user's own machine and
-  process table, and is documented; batching deletes reduces call count.
-- Non-zero exit or unparseable JSON becomes a provider error carrying bws's
-  redacted stderr. bws rate limiting therefore surfaces as a provider error
-  with the server message intact.
+  process table, and is documented.
+- A non-zero exit becomes a provider error carrying bws's redacted stderr.
+  Successful list/create/edit calls must return valid JSON. Successful delete
+  output is intentionally treated as opaque because supported BWS CLI versions
+  return human-readable singular or plural confirmation text even when JSON
+  output is requested. BWS rate limiting therefore surfaces as a provider
+  error with the server message intact.
 
 ## Exit Codes
 

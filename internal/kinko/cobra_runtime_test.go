@@ -45,6 +45,7 @@ func TestRuntimeRootCommandSurface(t *testing.T) {
 		cmdImport,
 		cmdInit,
 		cmdLock,
+		cmdMigration,
 		cmdMove,
 		cmdPassword,
 		cmdPath,
@@ -54,6 +55,7 @@ func TestRuntimeRootCommandSurface(t *testing.T) {
 		cmdSetKey,
 		cmdShow,
 		cmdStatus,
+		cmdSync,
 		cmdUnlock,
 		cmdVersion,
 	}

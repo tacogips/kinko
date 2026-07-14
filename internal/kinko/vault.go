@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +54,7 @@ type vaultMeta struct {
 	SessionKeySource  string     `json:"session_key_source,omitempty"`
 	KDFParamsPassword *kdfParams `json:"kdf_params_password,omitempty"`
 	UpdatedAt         string     `json:"updated_at,omitempty"`
+	MachineID         string     `json:"machine_id,omitempty"`
 }
 
 type kdfParams struct {
@@ -97,6 +99,10 @@ func initVault(dataDir string, password string) error {
 	if err != nil {
 		return fmt.Errorf("generate session key material: %w", err)
 	}
+	machineID, err := newMachineID()
+	if err != nil {
+		return fmt.Errorf("generate machine id: %w", err)
+	}
 
 	meta := vaultMeta{
 		Version:           vaultVersion,
@@ -107,6 +113,7 @@ func initVault(dataDir string, password string) error {
 		SessionKeySource:  sessionKeyRandom,
 		KDFParamsPassword: kdf,
 		UpdatedAt:         time.Now().UTC().Format(time.RFC3339),
+		MachineID:         machineID,
 	}
 	if err := saveMetaAtomically(dataDir, &meta); err != nil {
 		return err
@@ -126,6 +133,30 @@ func initVault(dataDir string, password string) error {
 		return fmt.Errorf("write vault marker: %w", err)
 	}
 	return nil
+}
+
+func newMachineID() (string, error) {
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		return "", fmt.Errorf("read random bytes: %w", err)
+	}
+	return hex.EncodeToString(random), nil
+}
+
+func isValidMachineID(value string) bool {
+	if len(value) != 16 {
+		return false
+	}
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r >= 'a' && r <= 'f' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func ensureDirLayout(dataDir string) error {

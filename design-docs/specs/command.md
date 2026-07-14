@@ -107,6 +107,82 @@ Exit codes:
 - `13`: persistence / I/O failure
 - `14`: metadata/KDF parameters rejected by safety validation
 
+### `kinko migration`
+
+Inspect and apply backward-compatible vault metadata migrations.
+
+```bash
+kinko migration [--yes|-y] [--json]
+```
+
+Behavior:
+- Preview is the default. It lists named pending steps without changing the
+  vault or requesting the vault password.
+- `--yes`/`-y` verifies the vault password, acquires the mutation lock, and
+  persists all still-pending steps through the atomic metadata rewrite path.
+- `--json` emits the mode and each step's `name`, `pending`, and `applied`
+  fields without secret values.
+- The initial migration step is `assign-machine-id`, which gives legacy
+  vaults the 16-lowercase-hex `machine_id` now created by `kinko init`.
+- A repeat invocation with no remaining work succeeds and reports
+  `no pending migrations`.
+
+Exit codes:
+- `0`: preview, successful apply, or no pending migrations
+- `10`: vault password authentication failed
+- `11`: policy/argument validation failed
+- `12`: mutation lock conflict
+- `13`: metadata read/write or other local I/O failure
+- `14`: malformed or safety-invalid metadata
+
+### `kinko sync push|pull --provider=bws`
+
+Synchronize all profiles, path scopes, and the shared scope with Bitwarden
+Secrets Manager through the official `bws` CLI.
+
+```bash
+kinko sync push --provider=bws [--force] [--dry-run] [--project-id <id>] [--json]
+kinko sync pull --provider=bws [--force] [--dry-run] [--project-id <id>] [--json]
+kinko --force sync push --provider=bws
+```
+
+Behavior:
+- Both directions require vault password re-entry before scope enumeration or
+  provider access and acquire the vault mutation lock.
+- `--provider` is required and v1 accepts only `bws`.
+- `--dry-run` prints the complete value-free action plan without changing the
+  vault, encrypted sync state, or BWS.
+- `--force` is the root persistent flag. For sync it resolves divergence in
+  the command direction; it never bypasses duplicate-name or note validation.
+- `--project-id` overrides `KINKO_BWS_PROJECT_ID`, encrypted config key
+  `sync.bws.project_id`, and sole-project auto-resolution.
+- `--json` emits stable counts, actions, scope metadata, and conflict reasons;
+  secret values and token values are never emitted.
+- `KINKO_BWS_ACCESS_TOKEN` overrides the same-named shared secret.
+  `BWS_ACCESS_TOKEN` is ignored and cannot leak into the isolated child
+  environment. `KINKO_BWS_BIN` selects a custom `bws` executable.
+- Push records successful remote prefixes after a partial provider failure.
+  Pull writes all vault changes once and then persists the encrypted baseline.
+- A deletion is propagated only when the encrypted baseline proves the entry
+  was previously synchronized and the surviving side is unchanged. Sync has
+  no `--prune` flag; `path prune-missing` remains path-scope cleanup.
+- BWS create/edit requires values in argv. kinko invokes no shell, but values
+  may be visible to same-machine process inspection during those calls.
+
+Exit codes:
+- `0`: success, including a successful dry-run
+- `10`: vault password authentication failed
+- `11`: invalid flags/provider/project, missing machine id, scope collision,
+  or ambiguous/malformed remote metadata
+- `12`: mutation lock conflict
+- `13`: local persistence or I/O failure
+- `14`: malformed encrypted vault/config/sync-state metadata
+- `15`: unresolved synchronization conflict
+- `16`: missing/failing/timed-out `bws` process or invalid provider JSON
+
+Detailed data model and decision tables:
+`design-docs/specs/design-bws-sync.md`.
+
 ### `kinko status`
 
 Show lock state, active timeout, data dir, and current path/profile resolution.
@@ -786,6 +862,8 @@ These commands are design ideas and are not shipped behavior yet:
 Run local diagnostics: permissions, lock-state health, config validity, vault integrity.
 
 Current diagnostics include:
+- Warn when `meta.v1.json` has no `machine_id` and direct the user to
+  `kinko migration`; the warning disappears after successful migration.
 - Warn when `meta.v1.json` has no `session_key_source`, which identifies
   pre-migration session metadata. Users should unlock once with a current
   release, rotate the vault password, and treat old `meta.v1.json` backups as
@@ -817,6 +895,8 @@ Current diagnostics include:
 | `import` | optional shell argument, `--file`, `--yes`/`-y`, `--confirm-with-values`, `--allow-shared` |
 | `exec` | `--all`, `--env` |
 | `password change` | `--current-stdin`, `--new-stdin`, `--current-fd`, `--new-fd`, `--force-tty` |
+| `migration` | `--yes`/`-y`, `--json` |
+| `sync push`, `sync pull` | `--provider`, `--dry-run`, `--project-id`, `--json` (`--force` is persistent) |
 | `folder remove` | `--keep-storage`, `--yes`/`-y` |
 
 ### Environment Variables
@@ -828,6 +908,9 @@ Current diagnostics include:
 | `KINKO_DATA_DIR` | No | `~/.local/kinko` | Data directory override |
 | `KINKO_CONFIG` | No | `~/.config/kinko/bootstrap.toml` | Bootstrap config override |
 | `KINKO_KEYCHAIN_PREFLIGHT` | No | `required` | Keychain preflight mode override |
+| `KINKO_BWS_ACCESS_TOKEN` | For BWS sync unless stored as a shared secret | - | Token injected only into the isolated `bws` child environment |
+| `KINKO_BWS_PROJECT_ID` | No | encrypted config or sole project | BWS project id override |
+| `KINKO_BWS_BIN` | No | `bws` from `PATH` | BWS executable path or name |
 
 ## Integration Use Cases
 
@@ -861,6 +944,8 @@ Operational notes:
 | 12 | Lock conflict / concurrent mutation (command-specific `cliError`) |
 | 13 | Persistence / I/O failure (command-specific `cliError`) |
 | 14 | Metadata/KDF validation failure (command-specific `cliError`) |
+| 15 | Synchronization conflict |
+| 16 | Remote provider failure |
 
 Implementation note:
 - `ExitCode(err)` returns child process exit status for `kinko exec` when the
@@ -878,6 +963,17 @@ Current command-specific structured mappings:
 | `password change` | Mutation lock conflict | `12` |
 | `password change` | Persistence / I/O failure | `13` |
 | `password change` | Metadata/KDF validation failure | `14` |
+| `migration` | Current password authentication failure | `10` |
+| `migration` | Invalid metadata policy failure | `11` or `14` |
+| `migration` | Mutation lock conflict | `12` |
+| `migration` | Metadata persistence / I/O failure | `13` |
+| `sync push` / `sync pull` | Current password authentication failure | `10` |
+| `sync push` / `sync pull` | Policy, project, scope, or remote metadata validation | `11` |
+| `sync push` / `sync pull` | Mutation lock conflict | `12` |
+| `sync push` / `sync pull` | Local persistence / I/O failure | `13` |
+| `sync push` / `sync pull` | Invalid encrypted metadata or sync state | `14` |
+| `sync push` / `sync pull` | Divergent values or deletion conflict | `15` |
+| `sync push` / `sync pull` | Missing/failing/timed-out provider or invalid JSON | `16` |
 | `unlock` | Current password authentication failure | `10` |
 | `unlock` | Invalid arguments / timeout policy failure | `11` |
 | `unlock` | Session/keychain persistence / I/O failure | `13` |
@@ -907,18 +1003,5 @@ Current command-specific structured mappings:
 
 No additional command-specific structured mappings are currently planned for
 this P4 pass.
-
-## Planned Subcommands
-
-Designed but not yet implemented; sections above cover only shipped
-commands.
-
-- `kinko sync <push|pull> --provider=bws` and `kinko migration` — remote
-  synchronization with Bitwarden Secrets Manager, per-vault machine id, and
-  vault-metadata migration. Reserves exit codes `15` (sync conflict) and
-  `16` (provider failure). Detailed design:
-  `design-docs/specs/design-bws-sync.md` (implementation plans:
-  `impl-plans/active/bws-sync-foundation.md`,
-  `impl-plans/active/bws-sync-command.md`).
 
 ---
