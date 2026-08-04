@@ -364,7 +364,10 @@ func formatSyncAction(action syncAction) string {
 }
 
 func parseAnyBWSKey(name string) (string, string, bool) {
-	if len(name) < 26 || name[16] != '_' || name[25] != '_' {
+	// len(name) < 27 (not 26) rejects a degenerate name with an empty key
+	// part (nothing after the second underscore); kinko key names are
+	// always at least one character long.
+	if len(name) < 27 || name[16] != '_' || name[25] != '_' {
 		return "", "", false
 	}
 	return name[17:25], name[26:], true

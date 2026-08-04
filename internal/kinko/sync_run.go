@@ -161,6 +161,13 @@ func runSyncWithOptions(opts globalOptions, syncOpts syncOptions, stdin io.Reade
 	if syncOpts.direction == syncDirectionPush {
 		result, err = applyPushPlan(ctx, client, projectID, plan, state, syncOpts.force)
 		if saveErr := persistSyncState(opts.dataDir, dek, config, state); saveErr != nil {
+			// applyPushPlan may already have mutated BWS (created, updated,
+			// or deleted secrets) before persisting the new state failed, so
+			// the user still needs to see which entries were applied.
+			_ = printSyncSummary(stdout, result, syncOpts.jsonOut)
+			if err != nil {
+				return errors.Join(saveErr, providerCLIError("BWS sync did not complete.", err))
+			}
 			return saveErr
 		}
 	} else {
@@ -170,6 +177,10 @@ func runSyncWithOptions(opts globalOptions, syncOpts syncOptions, stdin io.Reade
 				return newCLIError(exitCodeIOFailed, "Could not save the synchronized vault.", saveErr)
 			}
 			if saveErr := persistSyncState(opts.dataDir, dek, config, state); saveErr != nil {
+				// The vault file was already saved with the synchronized
+				// data before persisting the new sync state failed, so the
+				// user still needs to see which entries were applied.
+				_ = printSyncSummary(stdout, result, syncOpts.jsonOut)
 				return saveErr
 			}
 		}

@@ -681,6 +681,65 @@ func TestSyncMachineMismatchStateWarnsAndUsesNeverSyncedBaseline(t *testing.T) {
 	assertNoSyncFixtureLeak(t, stdout.String()+stderr.String())
 }
 
+func TestSyncPushPersistStateFailureReportsSummary(t *testing.T) {
+	stub := buildStubBWS(t)
+	dataDir, configPath, dek := setupSyncE2EVault(t)
+	t.Setenv(envKinkoBWSBin, stub.success)
+	t.Setenv(envKinkoBWSAccessToken, "fixture-kinko-token")
+
+	// Fail only the sync-state persistence write (config.v1.bin) after the
+	// remote push mutations have already succeeded, so the test exercises
+	// the case where applyPushPlan applied changes but persistSyncState
+	// could not record them.
+	configBlobPath := filepath.Join(dataDir, "vault", "config.v1.bin")
+	originalRename := atomicRename
+	atomicRename = func(oldpath, newpath string) error {
+		if newpath == configBlobPath {
+			return errors.New("injected sync state persistence failure")
+		}
+		return originalRename(oldpath, newpath)
+	}
+	t.Cleanup(func() { atomicRename = originalRename })
+
+	args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--json"}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	runErr := Run(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
+	if ExitCode(runErr) != exitCodeIOFailed {
+		t.Fatalf("exit=%d err=%v", ExitCode(runErr), runErr)
+	}
+
+	var result syncResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode summary despite persist failure: %v: %q", err, stdout.String())
+	}
+	if result.Created != 3 || len(result.Actions) != 3 {
+		t.Fatalf("created=%d actions=%d", result.Created, len(result.Actions))
+	}
+
+	journal := string(mustReadSyncTestFile(t, stub.journal))
+	if strings.Count(journal, "create ") != 3 {
+		t.Fatalf("remote mutations were not applied before the persistence failure: %q", journal)
+	}
+
+	// The vault and remote state changed, but the local sync-state record
+	// could not be persisted; confirm the local config still reflects the
+	// pre-push (never-synced) state rather than a torn write.
+	config, err := loadConfig(dataDir, dek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadBWSSyncState(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Entries) != 0 {
+		t.Fatalf("sync state was persisted despite the injected failure: entries=%d", len(state.Entries))
+	}
+
+	assertNoSyncFixtureLeak(t, stdout.String()+stderr.String()+runErr.Error())
+}
+
 type syncStubPaths struct {
 	success       string
 	stateful      string
