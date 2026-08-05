@@ -151,12 +151,14 @@ Decision:
 Current implementation:
 1. `kinko unlock` authenticates user and unwraps `DEK`.
 2. kinko creates or loads a random session wrap key in the OS keychain.
-3. kinko writes `lock/session.token`, which contains an expiry timestamp and
-   the `DEK` encrypted by that keychain-held wrap key.
+3. kinko writes `lock/session.token`, which contains either an expiry timestamp
+   or an explicit signed permanent-session marker, plus the `DEK` encrypted by
+   that keychain-held wrap key.
 4. The token payload is signed by random session key metadata stored in
    `meta.v1.json`.
-5. Later commands verify the token signature and expiry, load the wrap key from
-   the OS keychain, decrypt the session `DEK`, and continue.
+5. Later commands verify the token signature and, for bounded sessions, expiry;
+   then load the wrap key from the OS keychain, decrypt the session `DEK`, and
+   continue.
 
 Future daemon option:
 - A local daemon (`kinkod`) could hold `DEK` in memory only and serve commands
@@ -173,19 +175,24 @@ Conclusion:
 States:
 - `Locked`
 - `Unlocked(expires_at)`
+- `Unlocked(permanent)`
 
 Rules:
-- `unlock` writes a signed session token with an expiry timer
+- `unlock` writes a signed session token with either an expiry timer or an
+  explicit permanent marker
 - Any secret-read operation checks lock state first
-- Auto-lock occurs when now >= expires_at
+- Auto-lock occurs when now >= expires_at for bounded sessions
 - `lock` removes `lock/session.token` and attempts best-effort session wrap-key
   cleanup
-- `status` reports remaining unlocked duration
+- `status` reports the local auto-lock time or that the session is permanent
+- Password changes invalidate both bounded and permanent sessions
 
 Timeout:
 - Default `9h`
 - User-configurable with `kinko unlock --timeout`; encrypted config and
   environment timeout fallback are not current behavior.
+- `kinko unlock --permanent` disables automatic expiry and is mutually
+  exclusive with an explicitly supplied `--timeout`.
 
 ## Command Runtime Data Flow
 

@@ -17,7 +17,8 @@
 - `~/.config/kinko/bootstrap.toml` is only for minimal non-secret bootstrap settings.
   - Strict schema: only `kinko_dir` is allowed.
   - Sensitive-looking keys are rejected (for example `api_key`, `password`, `token`, `secret`).
-- Vault unlock is time-bounded and can be manually locked.
+- Vault unlock is time-bounded by default, supports an explicit permanent mode,
+  and can always be manually locked.
 - Session wrap keys are stored in OS keychain backends (not in vault files).
 
 ## Design Rationale: Vault Files vs OS Keychain
@@ -211,10 +212,10 @@ sequenceDiagram
     C->>K: load or create session wrap key
     K-->>C: session_wrap_key
     C->>C: encrypt DEK with session_wrap_key => enc_dek
-    C->>T: write signed session token(payload: enc_dek, expires_at)
+    C->>T: write signed session token(payload: enc_dek, expiry or permanent marker)
 
     U->>C: kinko get/set/export/exec
-    C->>T: read + verify signature/expiry
+    C->>T: read + verify signature and bounded expiry
     C->>K: Get(session wrap key)
     K-->>C: session_wrap_key
     C->>C: decrypt enc_dek with session_wrap_key => DEK
@@ -337,6 +338,7 @@ kinko --config /tmp/my-kinko/bootstrap.toml init
 
 ```bash
 kinko unlock --timeout 9h
+kinko unlock --permanent
 kinko status
 kinko lock
 ```
@@ -344,6 +346,10 @@ kinko lock
 When kinko is already unlocked, running `kinko unlock --timeout <duration>`
 refreshes the auto-lock time by relocking and prompting for the password again,
 matching `kinko lock` followed by `kinko unlock --timeout <duration>`.
+`kinko unlock --permanent` follows the same reauthentication behavior and keeps
+the session unlocked until `kinko lock` or another invalidating operation such
+as a password change. `--permanent` cannot be combined with an explicitly
+supplied `--timeout`.
 
 ### Shared Secrets Across All Project Directories
 
@@ -523,8 +529,9 @@ kinko config set example_key example_value
 ```
 
 Config is stored encrypted at rest. Unlock duration is controlled by
-`kinko unlock --timeout`; encrypted config does not currently set the unlock
-timeout.
+`kinko unlock --timeout`, or automatic expiry can be disabled explicitly with
+`kinko unlock --permanent`; encrypted config does not currently set the unlock
+mode or timeout.
 
 ### Password Change
 
@@ -645,7 +652,7 @@ Use these skills when operating secrets in local development so command selectio
 
 ```bash
 kinko init
-kinko unlock [--timeout 9h]
+kinko unlock [--timeout 9h | --permanent]
 kinko lock
 kinko status
 kinko version

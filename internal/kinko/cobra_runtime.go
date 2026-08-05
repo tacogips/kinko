@@ -240,21 +240,28 @@ func newRestoreCommand(ctx *runtimeContext, preflight func() error) *cobra.Comma
 
 func newUnlockCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
 	timeout := 9 * time.Hour
+	permanent := false
 	cmd := &cobra.Command{
 		Use:   cmdUnlock,
 		Short: "Unlock vault session",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			timeoutProvided := cmd.Flags().Changed("timeout")
+			if permanent && timeoutProvided {
+				return newCLIError(exitCodePolicyFailed, "--permanent and --timeout are mutually exclusive", nil)
+			}
 			if err := preflight(); err != nil {
 				return err
 			}
 			unlockOpts := unlockOptions{
 				timeout:         timeout,
-				timeoutProvided: cmd.Flags().Changed("timeout"),
+				timeoutProvided: timeoutProvided,
+				permanent:       permanent,
 			}
 			return runUnlockWithOptions(ctx.opts, unlockOpts, ctx.stdin, ctx.stdout, ctx.stderr)
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 9*time.Hour, "unlock timeout")
+	cmd.Flags().BoolVar(&permanent, "permanent", false, "unlock without automatic expiry")
 	return cmd
 }
 

@@ -53,19 +53,28 @@ kinko lock
 
 ### `kinko unlock`
 
-Unlock the vault for a bounded session. Prompts for passphrase (or OS-backed auth in future mode).
+Unlock the vault for a bounded-by-default or explicitly permanent session.
+Prompts for passphrase (or OS-backed auth in future mode).
 
 Examples:
 
 ```bash
 kinko unlock
 kinko unlock --timeout 9h
+kinko unlock --permanent
 ```
 
 Behavior:
 - Default unlock timeout is `9h`.
 - `--timeout` is the supported timeout override. Encrypted config does not
   currently provide an unlock-timeout source.
+- `--permanent` creates a session without automatic expiry. The session remains
+  revocable through `kinko lock` and is invalidated by password changes.
+- `--permanent` and an explicitly supplied `--timeout` are mutually exclusive.
+- Refreshing an already-unlocked session with either `--timeout` or
+  `--permanent` relocks first and requires password authentication again.
+- Successful permanent unlock and status output use `unlocked (permanent)`;
+  bounded sessions continue to report their local auto-lock time.
 
 ### `kinko password change`
 
@@ -798,7 +807,7 @@ Current diagnostics include:
 
 | Command | Flags |
 |---------|-------|
-| `unlock` | `--timeout` |
+| `unlock` | `--timeout`, `--permanent` |
 | `get`, `show` | `--reveal` |
 | `show` | `--all-scopes` |
 | `path prune-missing` | `--all-profiles`, `--yes`/`-y`, `--json` |

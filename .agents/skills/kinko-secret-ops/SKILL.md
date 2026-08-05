@@ -41,7 +41,14 @@ kinko status
 ```bash
 kinko init
 kinko unlock --timeout 9h
+# Explicitly opt out of automatic expiry when required:
+kinko unlock --permanent
 ```
+
+`--permanent` and an explicitly supplied `--timeout` are mutually exclusive.
+Permanent sessions remain revocable with `kinko lock` and are invalidated by
+password changes. Prefer a bounded timeout unless the user explicitly requests
+permanent unlock because the session remains usable for longer.
 
 3. Add secrets:
 ```bash

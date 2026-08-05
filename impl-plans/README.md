@@ -44,6 +44,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
+| `permanent-unlock.md` | 2026-08-05 | `design-docs/specs/command.md#kinko-unlock`, `design-docs/specs/architecture.md#lockunlock-session-model` |
 | `kinko-restore.md` | 2026-07-13 | `design-docs/specs/design-restore.md` |
 | `p4-ux-diagnostics-maintainability.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
 | `spec-command-reconciliation.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |

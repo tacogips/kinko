@@ -19,7 +19,13 @@ import (
 
 type sessionPayload struct {
 	ExpiresAtUnix int64  `json:"expires_at_unix"`
+	Permanent     bool   `json:"permanent,omitempty"`
 	EncDEK        string `json:"enc_dek"`
+}
+
+type sessionState struct {
+	ExpiresAt time.Time
+	Permanent bool
 }
 
 type sessionFile struct {
@@ -47,7 +53,11 @@ var sessionSecretStore secretStore = osKeyringStore{}
 var errUnlockCredential = errors.New("unlock failed")
 
 func unlockSession(dataDir string, timeout time.Duration, secret string) error {
-	if timeout <= 0 {
+	return unlockSessionWithMode(dataDir, timeout, false, secret)
+}
+
+func unlockSessionWithMode(dataDir string, timeout time.Duration, permanent bool, secret string) error {
+	if !permanent && timeout <= 0 {
 		return errors.New("timeout must be positive")
 	}
 	meta, err := loadMeta(dataDir)
@@ -80,9 +90,9 @@ func unlockSession(dataDir string, timeout time.Duration, secret string) error {
 		return fmt.Errorf("load session private key: %w", err)
 	}
 
-	payload := sessionPayload{
-		ExpiresAtUnix: time.Now().Add(timeout).Unix(),
-		EncDEK:        encDEK,
+	payload := sessionPayload{Permanent: permanent, EncDEK: encDEK}
+	if !permanent {
+		payload.ExpiresAtUnix = time.Now().Add(timeout).Unix()
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -154,15 +164,20 @@ func lockSessionWithWarning(dataDir string, warning io.Writer) error {
 }
 
 func sessionStatus(dataDir string) (locked bool, expiresAt time.Time, err error) {
+	locked, state, err := sessionStatusWithState(dataDir)
+	return locked, state.ExpiresAt, err
+}
+
+func sessionStatusWithState(dataDir string) (locked bool, state sessionState, err error) {
 	meta, err := loadMeta(dataDir)
 	if err != nil {
-		return true, time.Time{}, err
+		return true, sessionState{}, err
 	}
-	_, exp, err := verifyAndLoadSessionDEK(dataDir, meta)
+	_, state, err = verifyAndLoadSessionDEK(dataDir, meta)
 	if err != nil {
-		return true, time.Time{}, nil
+		return true, sessionState{}, nil
 	}
-	return false, exp, nil
+	return false, state, nil
 }
 
 func loadUnlockedDEK(dataDir string) ([]byte, error) {
@@ -177,53 +192,63 @@ func loadUnlockedDEK(dataDir string) ([]byte, error) {
 	return dek, nil
 }
 
-func verifyAndLoadSessionDEK(dataDir string, meta *vaultMeta) ([]byte, time.Time, error) {
+func verifyAndLoadSessionDEK(dataDir string, meta *vaultMeta) ([]byte, sessionState, error) {
 	b, err := os.ReadFile(filepath.Join(dataDir, "lock", "session.token"))
 	if err != nil {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
 	var sf sessionFile
 	if err := json.Unmarshal(b, &sf); err != nil {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
 
 	payloadJSON, err := base64.StdEncoding.DecodeString(sf.PayloadB64)
 	if err != nil {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
 	sig, err := base64.StdEncoding.DecodeString(sf.SigB64)
 	if err != nil {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
 	pub, err := sessionPublicKey(meta)
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, sessionState{}, err
 	}
 	if !ed25519.Verify(pub, payloadJSON, sig) {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
 
 	var payload sessionPayload
 	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
-	exp := time.Unix(payload.ExpiresAtUnix, 0)
-	if time.Now().After(exp) {
+	state := sessionState{Permanent: payload.Permanent}
+	if payload.Permanent {
+		if payload.ExpiresAtUnix != 0 {
+			return nil, sessionState{}, errors.New("locked")
+		}
+	} else {
+		if payload.ExpiresAtUnix <= 0 {
+			return nil, sessionState{}, errors.New("locked")
+		}
+		state.ExpiresAt = time.Unix(payload.ExpiresAtUnix, 0)
+	}
+	if !state.Permanent && !time.Now().Before(state.ExpiresAt) {
 		_ = lockSession(dataDir)
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
 	wrapKey, err := loadSessionWrapKey(dataDir, meta)
 	if err != nil {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
 	dek, err := decryptBlobWithAAD(wrapKey, payload.EncDEK, []byte(aeadContextSessionDEK))
 	if err != nil {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
 	if len(dek) != dekLength {
-		return nil, time.Time{}, errors.New("locked")
+		return nil, sessionState{}, errors.New("locked")
 	}
-	return dek, exp, nil
+	return dek, state, nil
 }
 
 func loadOrCreateSessionWrapKey(dataDir string, meta *vaultMeta) ([]byte, error) {

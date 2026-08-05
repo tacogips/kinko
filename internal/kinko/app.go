@@ -100,6 +100,7 @@ func runUnlock(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 	fs.SetOutput(io.Discard)
 	unlockOpts := unlockOptions{timeout: 9 * time.Hour}
 	fs.DurationVar(&unlockOpts.timeout, "timeout", 9*time.Hour, "unlock timeout")
+	fs.BoolVar(&unlockOpts.permanent, "permanent", false, "unlock without automatic expiry")
 	if err := fs.Parse(args); err != nil {
 		return newCLIError(exitCodePolicyFailed, err.Error(), err)
 	}
@@ -117,20 +118,24 @@ func runUnlock(opts globalOptions, args []string, stdin io.Reader, stdout, stder
 type unlockOptions struct {
 	timeout         time.Duration
 	timeoutProvided bool
+	permanent       bool
 }
 
 func runUnlockWithOptions(opts globalOptions, unlockOpts unlockOptions, stdin io.Reader, stdout, stderr io.Writer) error {
-	locked, expiresAt, err := sessionStatus(opts.dataDir)
+	if unlockOpts.permanent && unlockOpts.timeoutProvided {
+		return newCLIError(exitCodePolicyFailed, "--permanent and --timeout are mutually exclusive", nil)
+	}
+	locked, state, err := sessionStatusWithState(opts.dataDir)
 	if err != nil {
 		return newCLIError(exitCodeIOFailed, "Failed to inspect session status.", err)
 	}
 	if !locked {
-		if unlockOpts.timeoutProvided {
+		if unlockOpts.timeoutProvided || unlockOpts.permanent {
 			if err := lockSessionWithWarning(opts.dataDir, stderr); err != nil {
 				return newCLIError(exitCodeIOFailed, "Lock existing session before unlock refresh failed.", err)
 			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "unlocked (auto-lock at %s)\n", formatAutoLockTimeLocal(expiresAt))
+			printUnlockedStatus(stdout, state)
 			return nil
 		}
 	}
@@ -147,17 +152,17 @@ func runUnlockWithOptions(opts globalOptions, unlockOpts unlockOptions, stdin io
 		}
 	}
 
-	if err := unlockWithRetries(opts, unlockOpts.timeout, stdin, stderr, maxCredentialAttempts); err != nil {
+	if err := unlockWithRetriesMode(opts, unlockOpts.timeout, unlockOpts.permanent, stdin, stderr, maxCredentialAttempts); err != nil {
 		return newCLIError(unlockFailureExitCode(err), err.Error(), err)
 	}
-	locked, expiresAt, err = sessionStatus(opts.dataDir)
+	locked, state, err = sessionStatusWithState(opts.dataDir)
 	if err != nil {
 		return newCLIError(exitCodeIOFailed, "Failed to inspect session status after unlock.", err)
 	}
 	if locked {
 		return newCLIError(exitCodeIOFailed, "locked", errors.New("session remained locked after unlock"))
 	}
-	_, _ = fmt.Fprintf(stdout, "unlocked (auto-lock at %s)\n", formatAutoLockTimeLocal(expiresAt))
+	printUnlockedStatus(stdout, state)
 	return nil
 }
 
@@ -197,6 +202,10 @@ func readPasswordWithRetries(stdin io.Reader, stderr io.Writer, maxAttempts int)
 }
 
 func unlockWithRetries(opts globalOptions, timeout time.Duration, stdin io.Reader, stderr io.Writer, maxAttempts int) error {
+	return unlockWithRetriesMode(opts, timeout, false, stdin, stderr, maxAttempts)
+}
+
+func unlockWithRetriesMode(opts globalOptions, timeout time.Duration, permanent bool, stdin io.Reader, stderr io.Writer, maxAttempts int) error {
 	prompt := "Password: "
 	var buffered *bufio.Reader
 	if !isTerminalReader(stdin) {
@@ -220,7 +229,7 @@ func unlockWithRetries(opts globalOptions, timeout time.Duration, stdin io.Reade
 			}
 			return fmt.Errorf("unlock failed after %d attempts: %w", maxAttempts, err)
 		}
-		if err := unlockSession(opts.dataDir, timeout, secret); err == nil {
+		if err := unlockSessionWithMode(opts.dataDir, timeout, permanent, secret); err == nil {
 			return nil
 		} else {
 			if !errors.Is(err, errUnlockCredential) {
@@ -238,7 +247,7 @@ func unlockWithRetries(opts globalOptions, timeout time.Duration, stdin io.Reade
 }
 
 func runStatus(opts globalOptions, stdout io.Writer) error {
-	locked, expiresAt, err := sessionStatus(opts.dataDir)
+	locked, state, err := sessionStatusWithState(opts.dataDir)
 	if err != nil {
 		return err
 	}
@@ -246,8 +255,16 @@ func runStatus(opts globalOptions, stdout io.Writer) error {
 		_, _ = fmt.Fprintln(stdout, "locked")
 		return nil
 	}
-	_, _ = fmt.Fprintf(stdout, "unlocked (auto-lock at %s)\n", formatAutoLockTimeLocal(expiresAt))
+	printUnlockedStatus(stdout, state)
 	return nil
+}
+
+func printUnlockedStatus(stdout io.Writer, state sessionState) {
+	if state.Permanent {
+		_, _ = fmt.Fprintln(stdout, "unlocked (permanent)")
+		return
+	}
+	_, _ = fmt.Fprintf(stdout, "unlocked (auto-lock at %s)\n", formatAutoLockTimeLocal(state.ExpiresAt))
 }
 
 func formatAutoLockTimeLocal(expiresAt time.Time) string {

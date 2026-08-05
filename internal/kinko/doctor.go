@@ -74,8 +74,17 @@ func diagnoseSessionToken(dataDir string, meta *vaultMeta) []string {
 	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
 		return []string{"WARNING session-token: session token payload is not valid JSON."}
 	}
-	if time.Now().After(time.Unix(payload.ExpiresAtUnix, 0)) {
-		return nil
+	if payload.Permanent {
+		if payload.ExpiresAtUnix != 0 {
+			return []string{"WARNING session-token: permanent session token has an expiry."}
+		}
+	} else {
+		if payload.ExpiresAtUnix <= 0 {
+			return []string{"WARNING session-token: bounded session token has an invalid expiry."}
+		}
+		if !time.Now().Before(time.Unix(payload.ExpiresAtUnix, 0)) {
+			return nil
+		}
 	}
 	wrapKey, err := loadSessionWrapKey(dataDir, meta)
 	if err != nil {
