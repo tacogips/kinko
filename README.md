@@ -23,24 +23,98 @@
 
 ## Bitwarden Secrets Manager synchronization
 
-`kinko sync` synchronizes every profile, path scope, and the shared scope with
-one Bitwarden Secrets Manager project through the official `bws` CLI. Both
-directions require vault password re-entry and hold the vault mutation lock.
+`kinko sync` synchronizes encrypted-vault secret entries with one Bitwarden
+Secrets Manager project. Every sync command that reads cross-scope data asks
+for the vault password again and holds the vault mutation lock for a consistent
+snapshot. Secret values and access tokens are excluded from plans, progress,
+JSON output, checkpoints, and cleanup manifests.
+
+The compatibility defaults remain unchanged: an unfiltered `sync push` or
+`sync pull` selects all profiles, local path scopes, and shared entries;
+baseline-proven deletions propagate; and root `--force` makes the command
+direction authoritative. Push and pull apply by default, while `--dry-run`
+builds the complete value-free plan without changing local or remote state.
 
 ```bash
 # Legacy vaults need a machine id once; new vaults receive one at init.
 kinko migration --yes
 
-# Supply the token for one invocation, or store KINKO_BWS_ACCESS_TOKEN as a
-# kinko shared secret. Configure a project once or pass --project-id.
-export KINKO_BWS_ACCESS_TOKEN="..."
+# Store KINKO_BWS_ACCESS_TOKEN as a shared secret, or supply that environment
+# variable for one invocation. Configure a project once or pass --project-id.
 kinko config set sync.bws.project_id <project-id>
-kinko sync push --provider=bws
+kinko sync push --provider=bws --dry-run
 kinko sync pull --provider=bws --dry-run
 kinko --force sync pull --provider=bws
 ```
 
-Configuration and isolation:
+### Selection, portable paths, and conflicts
+
+Completion-mode commands accept repeatable selectors and exclusions.
+Selections intersect, exclusions win, and the reserved access-token key is
+always excluded. Keys and profiles are exact unless a key uses the explicit
+`glob:` prefix. A path selector must say whether it is portable or local.
+
+```bash
+kinko sync push --provider=bws \
+  --select-profile dev \
+  --select-path logical:work/project-a \
+  --select-key 'glob:API_*' \
+  --exclude-key API_DEPRECATED \
+  --shared=exclude \
+  --map-path work=/absolute/local/work \
+  --dry-run
+```
+
+Persistent logical-path maps are stored encrypted under `sync.paths.v1`;
+repeatable `--map-path <anchor>=<absolute-root>` values override them for one
+invocation. Pull and bootstrap create vault scope records only, never local
+directories.
+
+Conflicts fail by default. `--on-conflict=local|remote|skip` supplies a default
+policy, while repeatable `--resolve <entry-id>=<policy>` targets the stable,
+value-free ids printed by the current plan. `--force` cannot be combined with
+either option and never bypasses identity, selection, metadata, project, or
+revision checks. `--delete=auto` preserves baseline-proven propagation;
+`keep` suppresses it; `confirm` requires `--yes` when a deletion is planned.
+
+### Bootstrap, recovery, and maintenance
+
+Bootstrap copies a pinned source-machine namespace into the current vault. It
+previews by default, never mutates the source namespace or BWS, and does not
+create a normal baseline. A non-empty target requires `--merge`; each unequal
+value still requires an explicit conflict resolution.
+
+```bash
+kinko sync bootstrap --provider=bws --from-machine-id <source-machine-id> \
+  --map-path work=/absolute/local/work
+kinko sync bootstrap --provider=bws --from-machine-id <source-machine-id> \
+  --map-path work=/absolute/local/work --yes
+```
+
+For disaster recovery, restoring a kinko backup preserves its machine id and
+baseline; inspect `sync status --online` and a dry-run before applying changes.
+If only BWS survives, initialize a new vault, bootstrap from the lost machine
+id, then push under the new id. Kinko cannot prove the old machine is retired,
+so removing its namespace requires the exact retired-machine acknowledgement.
+
+Maintenance commands are preview-first unless described otherwise:
+
+- `sync status [--online]` is read-only; online mode adds provider drift.
+- `sync reset [--baseline|--checkpoint] --yes` changes encrypted sync history,
+  never vault or BWS values.
+- `sync reconcile --yes` adopts exact local/remote matches into state;
+  `--upgrade-metadata` performs the guarded v1-to-v2 replacement workflow.
+- `sync prune --yes` deletes only ownership-proven candidates one-by-one.
+  Foreign, ambiguous, malformed, duplicate, or retired-machine records need
+  the documented exact-id acknowledgements.
+
+Remote mutations have an unavoidable check-then-mutate race because neither
+the supported CLI nor the inspected SDK exposes an atomic revision condition.
+Kinko narrows that window by re-reading and validating immutable identity,
+project membership, content hash, metadata, and revision immediately before
+each update or delete.
+
+### Configuration, transport, and recovery controls
 
 - `KINKO_BWS_ACCESS_TOKEN` overrides the shared secret with the same name.
   The reserved shared key is never synchronized.
@@ -48,18 +122,52 @@ Configuration and isolation:
   highest priority. If neither is set, the sole accessible BWS project is used.
 - `KINKO_BWS_BIN` selects the `bws` executable for custom installations and
   test harnesses.
+- `--bws-config-file`, `--bws-profile`, and `--bws-server-url` override their
+  `KINKO_BWS_*` variables and encrypted config. Parent `BWS_CONFIG_FILE`,
+  `BWS_PROFILE`, and `BWS_SERVER_URL` are ignored. Config ownership,
+  permissions, profile syntax, and HTTPS endpoints are validated before use.
 - A parent `BWS_ACCESS_TOKEN` is ignored. Only the resolved kinko token and a
-  minimal runtime environment reach the `bws` child process.
-- `--dry-run` lists value-free actions and changes neither local encrypted
-  files nor remote secrets. `--json` emits the same value-free plan/summary.
-- Divergence exits with code `15` without mutation. `--force` makes the
-  command's source side authoritative. Provider failures exit with code `16`.
-- Deletions propagate automatically when a prior sync baseline proves which
-  side deleted the entry; `path prune-missing` remains the separate path-scope
-  cleanup command, so sync has no `--prune` flag.
-- BWS requires create/edit values as direct argv elements. No shell is used,
-  but those values may be visible to same-machine process inspection while
-  the `bws` process is running.
+  isolated minimal environment reach the `bws` child process.
+- Mutation is allowlisted to the contract-tested BWS CLI `2.0.0`; unknown
+  versions remain usable only for explicit read-only diagnostics and fail
+  closed for mutation.
+- `--max-retries` and `--retry-max-delay` bound transient read retries.
+  `--resume=auto|require|never` controls the single encrypted, value-free
+  checkpoint; `sync reset --checkpoint --yes` discards it.
+  `--progress=auto|plain|none|jsonl` writes value-free progress to stderr.
+- `kinko doctor --provider=bws` performs local capability/configuration checks.
+  `--online` checks access; only `--check-write --yes` creates a randomized
+  create/read/delete canary and reports a value-free cleanup id if needed.
+
+Secure mutation is the default for the completion interface:
+`--bws-transport=auto` never falls back when no value-safe in-process create or
+update capability is compiled. The inspected official Go SDK v2.1.0 uses CGO
+and has a distribution license that has not been accepted for normal kinko
+artifacts, so it is deliberately absent from the default dependency graph.
+After license and target-matrix approval it may be offered in a separately
+built artifact. The installed BWS CLI accepts create/edit values only in argv;
+using `--bws-transport=cli-legacy --allow-secret-argv` explicitly accepts that
+same-machine process-inspection exposure and always warns. No shell is used.
+
+### BWS tests
+
+The default and race suites use hermetic BWS stubs and neither read real-BWS
+credentials nor contact or mutate BWS. A real authenticated CRUD smoke test is
+available only with the `bws_real` build tag and all three explicit gates:
+
+```bash
+KINKO_TEST_REAL_BWS=1 \
+KINKO_TEST_BWS_ACCESS_TOKEN='<test access token>' \
+KINKO_TEST_BWS_PROJECT_ID='<dedicated test project id>' \
+go test -tags bws_real ./internal/kinko -run '^TestRealBWSCRUDOwnershipScoped$' -count=1
+```
+
+Use a dedicated test project. Each run snapshots pre-existing ids, uses a
+cryptographically unique key/note prefix, records every confirmed or discovered
+create immediately, and cleans up only matching run-owned ids one at a time. A
+failed cleanup leaves a logged 0600 manifest containing only project, prefix,
+and allowlisted ids. The real test is excluded from race builds and is not run
+by the default or CI test commands.
 
 ## Design Rationale: Vault Files vs OS Keychain
 

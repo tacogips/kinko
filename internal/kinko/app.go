@@ -16,10 +16,17 @@ const defaultProfile = "default"
 const maxCredentialAttempts = 3
 
 type globalOptions struct {
-	profile           string
-	path              string
-	dataDir           string
-	configPath        string
+	profile    string
+	path       string
+	dataDir    string
+	configPath string
+	// dataDirExplicit records whether dataDir came from an explicit
+	// --kinko-dir flag or KINKO_DATA_DIR environment variable, as opposed to
+	// being loaded from the bootstrap config or defaulted. `kinko init` uses
+	// this to avoid silently repointing an existing bootstrap config at a
+	// throwaway/secondary vault. See finalizeOnlyPreflight in
+	// cobra_runtime.go for where this is computed.
+	dataDirExplicit   bool
 	force             bool
 	confirm           bool
 	keychainPreflight string
@@ -50,8 +57,48 @@ func runInit(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 		return errors.New("init does not accept positional arguments")
 	}
 
+	// initStdin defaults to the raw stdin passed in. When init re-destroys
+	// an already-initialized vault below via runExplosionFlow, this is
+	// re-pointed at the buffered reader that flow returns so the NEW
+	// password prompt (readPasswordWithRetries below) consumes the
+	// still-buffered piped input rather than losing it to a second,
+	// independent bufio.Reader over the same underlying stdin. See the
+	// isTerminalReader branch below for why the terminal case must NOT do
+	// this.
+	var initStdin io.Reader = stdin
 	if isInitializedDataDir(opts.dataDir) {
-		return fmt.Errorf("kinko is already initialized in %s", opts.dataDir)
+		// An initialized vault already lives at this data dir. Rather than
+		// a copied lookalike confirmation gate, init must require the
+		// exact same authorization as `kinko explosion` before it is
+		// allowed to destroy that vault and re-initialize a fresh one:
+		// verified password re-entry, the "Are you absolutely sure? [y/N]"
+		// confirmation, the confirmation-token entry, and the locked,
+		// validated purge.
+		_, _ = fmt.Fprintf(stderr, "WARNING: kinko is already initialized in %s.\n", opts.dataDir)
+		_, _ = fmt.Fprintln(stderr, "Re-initializing requires the same authorization as 'kinko explosion': verified password re-entry, explicit confirmation, and the confirmation token.")
+		destroyed, explosionReader, err := runExplosionFlow(opts, stdin, stdout, stderr)
+		if err != nil {
+			return err
+		}
+		if !destroyed {
+			// The user aborted at the y/N confirmation or the
+			// confirmation-token prompt; runExplosionFlow already printed
+			// "aborted". Leave the existing vault untouched and perform no
+			// initialization.
+			return nil
+		}
+		// The old vault was destroyed. In the non-terminal (piped) case,
+		// the bytes for the NEW password prompt below are already
+		// buffered inside explosionReader and must be read from it. In
+		// the terminal case, verifyExplosionPassword read the old
+		// password directly off the raw fd with no-echo and nothing
+		// meaningful is buffered in explosionReader; the new-password
+		// prompt must keep reading from the raw stdin so it still gets
+		// today's no-echo TTY behavior instead of echoing keystrokes via
+		// the buffered reader.
+		if !isTerminalReader(stdin) {
+			initStdin = explosionReader
+		}
 	}
 	if anyVaultArtifact(opts.dataDir) {
 		return fmt.Errorf("data dir %s contains partial or complete vault data; move it aside or run 'kinko %s' first", opts.dataDir, cmdExplosion)
@@ -80,7 +127,7 @@ func runInit(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 	_, _ = fmt.Fprintln(stderr, "You must remember your password.")
 	_, _ = fmt.Fprintln(stderr, "WARNING: If you lose your password, vault data cannot be restored.")
 
-	pass, err := readPasswordWithRetries(stdin, stderr, maxCredentialAttempts)
+	pass, err := readPasswordWithRetries(initStdin, stderr, maxCredentialAttempts)
 	if err != nil {
 		return err
 	}
@@ -88,7 +135,7 @@ func runInit(opts globalOptions, args []string, stdin io.Reader, stdout, stderr 
 	if err := initVault(opts.dataDir, pass); err != nil {
 		return err
 	}
-	if err := writeBootstrapConfig(opts); err != nil {
+	if err := writeBootstrapConfigAfterInit(opts, stderr); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintln(stdout, "initialized")

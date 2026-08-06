@@ -19,9 +19,13 @@ This directory contains reference materials for system design and implementation
 | Apple Disk Utility disk images | https://support.apple.com/guide/disk-utility/create-a-disk-image-dskutl11888/mac | macOS encrypted disk image user-facing behavior reference |
 | Cryptomator | https://cryptomator.org/ | Comparable encrypted folder vault product |
 | VeraCrypt | https://veracrypt.io/ | Comparable encrypted volume/container product |
-| Bitwarden Secrets Manager CLI | https://bitwarden.com/help/secrets-manager-cli/ | `bws` command surface: auth, secret/project subcommands, `--output json`, run command |
+| Bitwarden Secrets Manager CLI | https://bitwarden.com/help/secrets-manager-cli/ | `bws` auth, secret/project syntax, config files, profiles, server settings, and encrypted state |
+| Bitwarden Secrets Manager SDK repository | https://github.com/bitwarden/sdk-sm | Official SDK/CLI source and language-binding architecture |
+| Bitwarden Go SDK v2 | https://github.com/bitwarden/sdk-go/tree/v2.1.0 | Inspected in-process Go API, CGO target requirements, CRUD request shapes, and lack of revision preconditions |
+| Bitwarden SDK license | https://github.com/bitwarden/sdk-go/blob/v2.1.0/LICENSE.txt | Restrictive redistribution/use terms that gate any SDK-enabled kinko artifact |
 | Bitwarden Secrets Manager Overview | https://bitwarden.com/help/secrets-manager-overview/ | Concepts: organizations, projects, machine accounts, access tokens |
 | Bitwarden Access Tokens | https://bitwarden.com/help/access-tokens/ | Machine-account access token format, scoping, and rotation |
+| Bitwarden Machine Accounts | https://bitwarden.com/help/machine-accounts/ | Project assignment and read versus read/write permission model |
 
 ## Reference Documents
 

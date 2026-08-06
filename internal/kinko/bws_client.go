@@ -48,11 +48,14 @@ type bwsProject struct {
 
 type bwsRunner func(ctx context.Context, bin string, env []string, args ...string) (stdout []byte, stderr []byte, err error)
 
+type bwsEnvironmentBuilder func(token string) (environment []string, cleanup func(), err error)
+
 type bwsClient struct {
-	binPath string
-	token   string
-	timeout time.Duration
-	runner  bwsRunner
+	binPath            string
+	token              string
+	timeout            time.Duration
+	runner             bwsRunner
+	environmentBuilder bwsEnvironmentBuilder
 }
 
 func resolveBWSAccessToken(getenv func(string) string, shared map[string]string, stderr io.Writer) (string, error) {
@@ -165,6 +168,17 @@ func (client *bwsClient) listSecrets(ctx context.Context, projectID string) ([]b
 	return secrets, nil
 }
 
+func (client *bwsClient) getSecret(ctx context.Context, secretID string) (bwsSecret, error) {
+	var secret bwsSecret
+	if err := client.runJSON(ctx, &secret, "secret", "get", secretID); err != nil {
+		return bwsSecret{}, err
+	}
+	if err := validateBWSSecret(secret); err != nil {
+		return bwsSecret{}, fmt.Errorf("%w: fetched secret: %v", errBWSInvalidJSON, err)
+	}
+	return secret, nil
+}
+
 func (client *bwsClient) createSecret(ctx context.Context, projectID, key, value, note string) (bwsSecret, error) {
 	var secret bwsSecret
 	if err := client.runJSONWithRedactions(ctx, &secret, []string{value}, "secret", "create", key, value, projectID, "--note", note); err != nil {
@@ -261,7 +275,12 @@ func (client *bwsClient) run(ctx context.Context, sensitiveValues []string, argu
 	callContext, cancel := context.WithTimeout(ctx, client.timeout)
 	defer cancel()
 
-	stdout, stderr, err := client.runner(callContext, client.binPath, buildBWSChildEnv(client.token), arguments...)
+	environment, cleanup, err := client.buildEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	stdout, stderr, err := client.runner(callContext, client.binPath, environment, arguments...)
 	if err != nil {
 		if errors.Is(callContext.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, fmt.Errorf("%w after %s", errBWSTimeout, client.timeout)
@@ -275,6 +294,20 @@ func (client *bwsClient) run(ctx context.Context, sensitiveValues []string, argu
 		return nil, fmt.Errorf("%w: %s: %s", errBWSCommandFailed, redacted, redactedError)
 	}
 	return stdout, nil
+}
+
+func (client *bwsClient) buildEnvironment() ([]string, func(), error) {
+	if client.environmentBuilder == nil {
+		return buildBWSChildEnv(client.token), func() {}, nil
+	}
+	environment, cleanup, err := client.environmentBuilder(client.token)
+	if err != nil {
+		return nil, nil, fmt.Errorf("prepare isolated BWS environment: %w", err)
+	}
+	if cleanup == nil {
+		cleanup = func() {}
+	}
+	return environment, cleanup, nil
 }
 
 func runBWSCommand(ctx context.Context, binary string, environment []string, arguments ...string) ([]byte, []byte, error) {

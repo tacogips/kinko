@@ -60,6 +60,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 
 	finalizeOnlyPreflight := func() error {
 		dataDirExplicit := root.PersistentFlags().Changed("kinko-dir") || os.Getenv("KINKO_DATA_DIR") != ""
+		ctx.opts.dataDirExplicit = dataDirExplicit
 		if !dataDirExplicit {
 			dataDir, ok, err := loadBootstrapDataDir(ctx.opts.configPath)
 			if err != nil {
@@ -155,78 +156,6 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 	)
 
 	return root, nil
-}
-
-func newSyncCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
-	root := &cobra.Command{
-		Use:   cmdSync,
-		Short: "Synchronize vault secrets with a remote provider",
-		Args:  cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			return command.Help()
-		},
-	}
-	root.AddCommand(
-		newSyncDirectionCommand(ctx, preflight, syncDirectionPush),
-		newSyncDirectionCommand(ctx, preflight, syncDirectionPull),
-	)
-	return root
-}
-
-func newSyncDirectionCommand(ctx *runtimeContext, preflight func() error, direction syncDirection) *cobra.Command {
-	provider := ""
-	dryRun := false
-	projectID := ""
-	jsonOutput := false
-	directionTitle := "Push"
-	if direction == syncDirectionPull {
-		directionTitle = "Pull"
-	}
-	command := &cobra.Command{
-		Use:   string(direction),
-		Short: fmt.Sprintf("%s vault secrets using a remote provider", directionTitle),
-		Args: func(_ *cobra.Command, args []string) error {
-			if len(args) != 0 {
-				return newCLIError(exitCodePolicyFailed, fmt.Sprintf("sync %s does not accept positional arguments.", direction), errors.New("unexpected sync arguments"))
-			}
-			return nil
-		},
-		RunE: func(*cobra.Command, []string) error {
-			if err := preflight(); err != nil {
-				return err
-			}
-			return runSyncWithOptions(ctx.opts, syncOptions{
-				direction: direction,
-				provider:  provider,
-				force:     ctx.opts.force,
-				dryRun:    dryRun,
-				projectID: projectID,
-				jsonOut:   jsonOutput,
-			}, ctx.stdin, ctx.stdout, ctx.stderr)
-		},
-	}
-	command.Flags().StringVar(&provider, "provider", "", "sync provider (required; bws)")
-	command.Flags().BoolVar(&dryRun, "dry-run", false, "print the sync plan without mutations")
-	command.Flags().StringVar(&projectID, "project-id", "", "BWS project id")
-	command.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON output")
-	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
-		return newCLIError(exitCodePolicyFailed, fmt.Sprintf("Invalid sync %s flag: %v", direction, err), err)
-	})
-	return command
-}
-
-func newDoctorCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
-	return &cobra.Command{
-		Use:   cmdDoctor,
-		Short: "Run local diagnostics",
-		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			if err := preflight(); err != nil {
-				return err
-			}
-			return runDoctor(ctx.opts, ctx.stdout)
-		},
-	}
 }
 
 func newBackupCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {

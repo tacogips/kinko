@@ -1,9 +1,9 @@
 # Design: `kinko sync` with Bitwarden Secrets Manager (bws)
 
 This document specifies remote synchronization of kinko secret values with
-Bitwarden Secrets Manager (BWS) via the official `bws` CLI, plus the two
-supporting vault-metadata features it requires: a per-vault kinko machine id
-and deterministic short scope (directory) hashes.
+Bitwarden Secrets Manager (BWS), using the official CLI for compatible
+control/read operations and a value-safe in-process transport for mutations,
+plus the supporting machine and scope metadata.
 
 ## Overview
 
@@ -20,24 +20,352 @@ Design goals:
    without colliding. Values are machine-specific, so cross-machine conflicts
    are not expected in normal operation.
 2. Sync must never silently overwrite either side. Divergence is an error by
-   default; `--force` is the only override, and the user owns conflict
-   resolution.
+   default; `--force` remains the compatibility override and granular rules
+   provide explicit per-entry resolution.
 3. The BWS access token used by kinko comes from the
    `KINKO_BWS_ACCESS_TOKEN` environment variable or from the kinko shared
    secret of the same name, and must never be confused with a
    `BWS_ACCESS_TOKEN` that the user may already have in the machine
    environment for their own bws usage.
-4. `bws` is executed as an external command from Go (no Bitwarden SDK
-   dependency); kinko degrades with a clear error when the binary is absent.
+4. BWS control/read operations may use the external `bws` command, while
+   value-bearing mutations use a value-safe in-process transport by default.
+   Provider capabilities and missing dependencies are diagnosed clearly.
 5. Existing vaults (created before this feature) gain the new metadata via an
    explicit `kinko migration` command; new vaults get it at `kinko init`.
 6. Secret values never appear in kinko output, logs, error messages, or
-   process argument lists.
+   process argument lists when the secure transport is used. The historical
+   CLI mutation transport is retained only as an explicit compatibility mode.
 
-Non-goals (out of scope for v1): folder-vault storage sync, encrypted config
-payload sync, providers other than bws, cross-machine value adoption
-(pulling another machine id's entries), and field-level merge of conflicting
-values.
+Non-goals: implicit synchronization of folder-vault bytes or the complete
+encrypted config payload, automatic takeover of another live machine id, and
+field-level merging inside a secret value. Cross-machine copy/adoption,
+portable scope mapping, selective operation, repair, and provider extension
+points are specified below.
+
+## Operational Completion Contract (2026-08-05)
+
+This section is the normative extension for the completion features. The base
+v1 sections below remain normative for an invocation that uses no new flag.
+Existing note format 1, secret names, state key `sync.bws.v1`, JSON fields,
+exit codes, and push/pull classification tables remain accepted. A new feature
+must not silently migrate them or change a legacy plan.
+
+### Compatibility and state-format rules
+
+- Existing `sync push|pull --provider=bws` still selects all profiles, paths,
+  and shared entries, propagates baseline-proven deletion, and interprets
+  `--force` as "the command direction wins" (local for push, remote for pull).
+  It is not equivalent to one fixed `source` policy. Explicit `--force` cannot
+  be combined with `--on-conflict` or `--resolve`.
+- Format-1 notes and format-1 state are read indefinitely. Legacy-only runs
+  keep writing format 1. The first operation that needs logical paths,
+  selectors, checkpoints, or per-entry policy writes state format 2 under the
+  same encrypted key. An old binary then rejects the unsupported format rather
+  than acting on stale state. The format-2 decoder preserves unknown fields as
+  raw JSON on read/modify/write; unknown major formats fail closed.
+- Format 2 records provider endpoint, organization, project, machine, remote
+  secret id/name/revision, local and logical scope identity, key, baseline
+  value hash, and a schema/version discriminator. Provider identity is a hash
+  of canonical non-secret endpoints plus organization and project ids; profile
+  labels alone are not identity. No token, value, path-map root, or checkpoint
+  plaintext is stored outside the existing encrypted config blob.
+- Format 2 also retains a value-free ownership record for each confirmed kinko
+  create (id, identity, and last kinko-confirmed revision). Resetting a
+  baseline does not erase ownership proof. Ownership records are removed only
+  after a confirmed remote deletion; a revision mismatch makes the record
+  ineligible for automatic prune and requires exact-id acknowledgement. Thus
+  the ledger is bounded by live or ambiguously deleted kinko-created records.
+- Selected writes merge only selected records into state. Unselected records,
+  including their unknown fields, are retained byte-for-byte as raw JSON and
+  are never inferred to be absent. `sync reset` is the only workflow that can
+  intentionally discard a selected baseline.
+- Bootstrap provenance and maintenance checkpoints are not normal baselines.
+  In particular, a bootstrap never associates a source-machine secret id with
+  the current machine; the subsequent current-machine push therefore creates
+  a new remote record instead of editing or deleting the source.
+
+All sync flags and selector syntax are validated before password/provider
+access. Every sync command that reads encrypted cross-scope data, including a
+preview or status, requires direct password re-entry. It then takes the vault
+mutation lock for a consistent snapshot, reloads metadata/vault/config under
+that lock, and holds the lock through final persistence or output. Push/pull
+retain their apply-by-default behavior and `--dry-run`; bootstrap, reset,
+reconcile, and prune are preview-by-default and require `--yes` to apply. A
+complete value-free plan is built before the first mutation. `--yes` confirms
+only that pinned plan and never weakens password, selection, or revision gates.
+
+### Cross-machine bootstrap and disaster recovery
+
+`kinko sync bootstrap --provider=bws --from-machine-id <id>` copies a source
+namespace into the current vault. Preview is the default and `--yes` applies.
+The read plan is pinned to endpoint, organization, project, source machine,
+secret ids, revisions, metadata, selector, and path-map digest. Apply re-gets
+every selected source id and aborts before the single atomic vault write if any
+precondition changed. It performs no BWS mutation, never changes either machine
+id, never creates a normal baseline, and never treats an omitted source entry
+as a deletion.
+
+The default target must contain no user secret entries; the reserved BWS token,
+encrypted provider configuration, and empty containers do not make it
+non-empty. `--merge` allows existing target values. Equal values are unchanged;
+missing values are created; every differing value requires an exact conflict
+resolution. The entire local result is built in memory and committed once, so
+an interrupted bootstrap cannot leave partial local containers. A value-free
+checkpoint may cache only the validated plan and is safe to discard.
+
+Restore has two supported forms:
+
+1. A kinko backup retains its machine id and baseline. The operator runs
+   `sync status --online` and a dry-run before the first mutation.
+2. If only BWS survives, a new vault bootstraps from the lost id and later
+   pushes under its new id. The lost namespace is only an orphan *candidate*.
+   Pruning it requires an explicit retired-machine declaration described below.
+
+Identity takeover remains unsupported because kinko cannot prove another
+writer is dead. Exact identity recovery requires restoring vault metadata.
+
+### Portable logical paths and format-2 notes
+
+A format-2 path note stores only `logical_path`, not the source machine's
+absolute display path. A logical path is a canonical, slash-separated anchor
+and relative path such as `work/project-a`. Anchors match
+`[a-z][a-z0-9-]{0,62}`; empty, `.`, `..`, repeated separators, backslashes,
+NUL, and platform volume syntax are rejected. Shared notes have no path.
+Format-2 names derive their eight-hex scope hash from the distinct
+`kinko.scope.v2` domain, profile, scope kind, and logical path. Format-1 names
+continue to use the absolute-path v1 domain.
+
+Repeatable `--map-path <anchor>=<absolute-root>` overrides encrypted
+`sync.paths.v1` mappings for that invocation. Roots are absolute and cleaned;
+duplicate anchors, equal canonical roots, case-fold aliases on a
+case-insensitive filesystem, or overlapping roots with an ambiguous longest
+match fail closed. Push maps a stored absolute scope by longest root prefix.
+Pull/bootstrap lexically joins the relative logical path below the mapped root,
+cleans it, and verifies containment. These workflows create only vault scope
+records, never directories or files. Unmapped logical paths are conflicts.
+
+Merely changing a map changes local materialization, not remote metadata.
+`sync reconcile --upgrade-metadata` previews a v1-to-v2 replacement. Apply
+requires `--yes`, an exact current id/revision/value/note recheck, successful
+creation and read-back of the v2 record, atomic state replacement, and then an
+immediate revision recheck before deletion of the v1 id. An interruption may
+temporarily leave both records; the checkpoint recognizes only that exact pair
+and resumes without creating a third. Collisions stop the whole migration.
+
+### Selection and exclusion boundary
+
+Push, pull, bootstrap, status, reset, reconcile, and prune accept repeatable
+`--select-profile`, `--select-path`, `--select-key`, and corresponding
+`--exclude-*` flags plus `--shared=include|exclude|only`. The existing root
+`--profile` and `--path` remain ignored by sync, including when explicitly set,
+because that is existing behavior. Profile and key values are exact by default;
+only a `glob:` prefix enables a case-sensitive, platform-independent key glob
+with `*`, `?`, and bracket expressions; malformed patterns fail before access.
+Paths must use `logical:<path>` or `local:<absolute-path>` so portable and
+legacy identities cannot be confused.
+
+Selection is evaluated against the union of local entries, validated remote
+metadata, and state records. All inclusions intersect, exclusions win, and the
+reserved access-token key is always excluded. An empty effective selection is
+a successful no-op for status and a policy error for a mutating workflow.
+Malformed machine-prefixed metadata cannot be safely selected or excluded and
+blocks mutation, except for the exact malformed-record prune flow below.
+Offline status and reset have no provider dependency and evaluate only local
+and state records; online status and provider workflows add the pinned remote
+set. This difference is explicit in their plan JSON.
+
+The normalized selector and its digest appear in plans/checkpoints. Excluded
+entries may be returned by BWS's project-wide list API, but their values are
+discarded immediately after metadata classification; they never enter an
+action, mutation request, comparison hash, state update, checkpoint, output, or
+deletion inference. Tests byte-compare excluded local data and raw state.
+
+### Status, reset, reconcile, and prune
+
+- `sync status` is strictly non-mutating. It requires the normal sync password
+  re-entry because offline status reads encrypted cross-scope data. Offline
+  mode reports value-free local identity, maps, selector, baseline/checkpoint
+  health, and formats. `--online` adds provider drift after a pinned read.
+- `sync reset` previews selected baseline removal; `--checkpoint` selects only
+  the checkpoint, while `--baseline` selects only baseline records and neither
+  flag means both. A checkpoint is indivisible and can be removed only when
+  its stored selector digest exactly matches the requested selector (or no
+  selector was supplied); it is never partially rewritten. `--yes` applies
+  one encrypted config write. It never changes vault or BWS values and
+  explicitly reports the resurrection/deletion ambiguity that a future
+  never-synced run can create.
+- `sync reconcile` previews state adoption where local and remote value hashes,
+  name, note, machine, endpoint, organization, project, scope, and key agree.
+  `--yes` applies state only. Divergence remains a conflict. Metadata upgrade
+  additionally requires `--upgrade-metadata` and follows the replacement gate
+  above.
+- `sync prune` previews by default and `--yes` applies. A current-machine entry
+  absent from local data and the active baseline is merely *untracked*, not
+  provably orphaned; it requires explicit `--secret-id`. Automatic candidates
+  are limited to ids in a completed checkpoint/ownership ledger or selected
+  baseline tombstone. A different namespace requires both
+  `--machine-id <id>` and `--ack-retired-machine <same-id>`; the mismatch is an
+  error and the warning states that kinko cannot prove retirement. Malformed or
+  duplicate records additionally require exact repeatable `--secret-id` and
+  `--ack-malformed`. Foreign names and other projects are never candidates.
+- `--prune-empty-scopes` removes only empty vault map containers created by a
+  selected sync. It never removes filesystem paths or folder vaults.
+
+Before every remote update or delete, kinko re-gets the immutable id and
+verifies endpoint, organization, project membership, machine, name, note,
+value hash, and captured revision. Mutation is refused unless authoritative
+provider metadata proves the secret belongs to exactly the selected project;
+this prevents deleting or rewriting a secret shared with another project. The
+current BWS CLI and official SDK expose no atomic
+revision precondition, so a remaining check/mutation race is unavoidable. Bulk
+delete is forbidden: ids are deleted one at a time, no delete is blindly
+retried after an ambiguous response, and the result is reconciled by id.
+Ordinary push/pull keeps compatible `--delete=auto`; `keep` suppresses
+propagation and `confirm` requires `--yes` if the plan contains a deletion.
+
+### Granular conflict rules
+
+`--on-conflict=fail|local|remote|skip` sets a direction-independent default.
+The plan emits a stable, value-free `entry_id` as the full lowercase SHA-256 of
+the canonical provider/project/machine/scope/key identity. Repeatable
+`--resolve <entry_id>=local|remote|delete-local|delete-remote|skip` addresses
+exactly one conflict. A rule that is duplicate, matches no current conflict,
+or requests deletion of an absent side is an error. A remote delete also needs
+a baseline or the explicit prune acknowledgements; a local delete is included
+in the one atomic vault write. No rule can cross selector, endpoint,
+organization, project, machine, scope, key, secret id, or revision boundaries.
+`--force` never bypasses those gates or malformed/duplicate validation.
+
+### BWS configuration, diagnostics, and version gates
+
+`--bws-config-file`, `--bws-profile`, and `--bws-server-url` have matching
+`KINKO_BWS_*` variables and encrypted config keys. Precedence is flag,
+`KINKO_` environment, encrypted config, then the BWS default config/profile.
+Parent `BWS_CONFIG_FILE`, `BWS_PROFILE`, `BWS_SERVER_URL`, and
+`BWS_ACCESS_TOKEN` are ignored. Kinko reads only the selected profile's
+`server_base`, `server_api`, and `server_identity`; an explicit server URL
+overrides the base and derives API/identity URLs using BWS 2.0 rules. Endpoints
+must be absolute HTTPS URLs except an explicit test-only loopback transport;
+userinfo, query, and fragment are forbidden. Canonicalization lowercases
+scheme/host, removes a default port, normalizes the required API/identity path
+and trailing slash, and preserves non-default ports before identity hashing.
+Kinko does not reuse or mutate the user's BWS authentication state. A CLI
+control call uses a temporary 0700 home/config with resolved endpoints and
+`state_opt_out=true`.
+External config is opened once without following a final symlink, must be a
+regular file owned by the current user, and must not be group/world writable;
+unsafe ownership, permissions, parse errors, or duplicate profile keys fail
+before the token is used. Resolved endpoints are pinned for the operation, so
+a later file change cannot redirect an in-flight token.
+
+`kinko doctor` with no new flags preserves today's local, non-interactive
+behavior and output. `kinko doctor --provider=bws` adds local binary/version,
+config/profile/endpoint, transport capability, path-map, and encrypted
+state/checkpoint checks; checks needing encrypted data use normal password
+re-entry. `--online` distinguishes missing credentials, rejected/expired
+token, TLS/clock failure, project not found/not assigned, read forbidden, and
+write capability unknown. `--check-write --yes` is the only doctor mode that
+mutates: it creates one randomized canary, records its id before further work,
+reads it back, and deletes that exact id. Delete failure reports a value-free
+cleanup id/manifest.
+
+Only exact CLI versions covered by adapter contract fixtures are enabled for
+mutation. The initial allowlist contains only installed/inspected `2.0.0`;
+`0.3+` or an untested `2.0.x` patch is not proof of output compatibility.
+Unknown versions may run `doctor` and explicit read-only diagnostics with a
+warning, but mutation fails closed. There is no version-gate override for a
+mutation.
+
+### Secure transport and dependency boundary
+
+Installed `bws 2.0.0` requires the value in `secret create <KEY> <VALUE>
+<PROJECT_ID>` and `secret edit --value <VALUE>` and has no stdin/fd option.
+Therefore a subprocess wrapper cannot make those mutations value-safe.
+
+`--bws-transport=auto` is the default. List/get and revision-checked delete may
+use the isolated CLI adapter, but create/update require an in-process transport
+with a `value-safe-mutation` capability. Synced payload values are passed only
+as in-memory request fields: kinko never adds them to argv or an environment,
+and redaction wrappers cover provider errors before formatting. If the
+capability is not compiled/available, a plan containing create/update fails
+before any mutation; auto never falls back to CLI mutation.
+
+The official Go SDK v2.1.0 was inspected: it provides in-process CRUD but uses
+CGO, requires explicit API/identity and organization identity, provides no
+revision-conditional mutation, and has a restrictive SDK license that may not
+permit redistribution in kinko's normal artifacts. It is therefore a candidate
+adapter, not an approved unconditional dependency. Distribution/license review
+and target-matrix validation are mandatory capability gates. A separately
+built SDK-enabled artifact may be used only where its license is affirmatively
+accepted. `--bws-transport=cli-legacy --allow-secret-argv` retains current
+create/edit behavior, always warns, and requires both flags even in a TTY.
+
+The access token may already enter kinko through the documented
+`KINKO_BWS_ACCESS_TOKEN` source; secure mode does not copy it to argv, output,
+progress, errors, or checkpoints. A CLI control adapter receives only the token
+in its isolated `BWS_ACCESS_TOKEN` environment. Synced payload values never
+enter any environment. Token and payload buffers are released promptly, and
+tests treat provider request/response serialization as sensitive memory.
+
+### Bounded retry, progress, and resume
+
+Transient read/list/get failures (network, timeout, 429, and 5xx) retry with
+full-jitter capped exponential backoff and `Retry-After`. Defaults are five
+retries, 500 ms initial delay, 30 s per-delay cap, and two minutes total delay;
+`--max-retries` and `--retry-max-delay` may increase these only up to ten
+retries per request, 60 seconds per delay, and a five-minute global retry-delay
+budget per operation. Authentication, permission, validation,
+conflict, and non-idempotent mutations are not blindly retried.
+
+Before a remote mutation, an encrypted checkpoint stores operation/provider
+identity, selector/plan digests, action ids, expected revisions/hashes, phase,
+and confirmed result ids/revisions, but no values or token. It is persisted
+before the first action and after each confirmed action. An ambiguous create is
+reconciled by the exact deterministic name, note, project, and value hash;
+zero matches permits one retry, one match adopts it, and multiple matches stop.
+An ambiguous update re-gets its immutable id: intended content is adopted, an
+unchanged precondition permits one retry, and any other content stops. An
+ambiguous delete treats a missing id as confirmed, permits one retry only if
+the complete precondition is still present, and otherwise stops. Resume
+reloads values from the vault and verifies their hashes plus every remote
+precondition.
+`--resume=auto|require|never` is bounded to the one matching checkpoint;
+changed inputs refuse resume. `sync reset --checkpoint --yes` discards it.
+
+Progress is value-free stderr output. `--progress=auto|plain|none|jsonl`
+defaults to TTY-aware `auto`; JSONL stays on stderr. Existing final stdout and
+legacy JSON fields remain unchanged; new fields are additive only when a new
+feature is used. Provider errors are classified before redaction and never
+include raw request/response bodies.
+
+### Provider/payload and testing boundaries
+
+The sync core accepts typed payload descriptors and advertised provider
+capabilities. Only `secret-entry/v1` is enabled. Unknown payloads or missing
+capabilities fail before planning mutation. `folder-vault` and `config` remain
+disabled; access tokens, sync state/checkpoints, machine metadata, folder
+registrations, and bootstrap paths are permanently excluded from any future
+config payload.
+
+Hermetic stub tests cover provider and CLI adapters, selectors, maps,
+bootstrap, raw-state preservation, conflicts, every deletion gate, malformed
+records, fake-clock retries, ambiguous results, resume, diagnostics, and
+redaction. Secure-mode tests use canary values and inspect argv, added child
+environment, stdout/stderr, structured output, errors, progress, and decrypted
+checkpoint fixtures for any occurrence.
+
+Real BWS tests require all of `KINKO_TEST_REAL_BWS=1`,
+`KINKO_TEST_BWS_ACCESS_TOKEN`, and `KINKO_TEST_BWS_PROJECT_ID`. Each run uses a
+cryptographically unique machine/name prefix, snapshots all pre-existing ids,
+records each confirmed or discovered created id immediately, and deletes only
+ids both absent from the snapshot and still matching the run's project/prefix.
+The suite never bulk-deletes and is excluded from default tests, CI, and race
+runs. Failure leaves a 0600, value-free allowlist manifest.
+
+No Go source or test file may exceed 1000 lines; new files target 700. The
+currently oversized `cobra_runtime.go` (1002 lines) and `sync_e2e_test.go`
+(1010 lines) must be split mechanically before feature work, with tests and
+package-private behavior unchanged.
 
 ## Terminology
 
@@ -143,10 +471,11 @@ the key.
 
 The kinko value in plaintext (from BWS's perspective; Bitwarden encrypts
 server-side). Multiline values are passed through unchanged. Empty-string
-values are legal and round-trip as empty strings. Values are passed as one
-argv element (no shell), so OS argv limits (~256 KiB on darwin) bound the
-practical value size; an oversize or BWS-rejected value is a provider error
-that names the key, never the value.
+values are legal and round-trip as empty strings. The secure transport sends
+values in-process and rejects a value larger than 256 KiB before provider
+access; a lower documented/provider limit also applies. The legacy
+CLI transport passes a value as one argv element and is available only with
+the acknowledgements specified in the operational completion contract.
 
 ### Secret note: sync metadata
 
@@ -431,7 +760,7 @@ scope in the vault (the directory itself is not required to exist on disk;
 - Binary resolution: `KINKO_BWS_BIN` (absolute path or name looked up in
   `PATH`) when set, else `exec.LookPath("bws")`. A missing binary is a
   provider error with install guidance.
-- Every call runs with `--output json`, `--color no`, a per-invocation
+- CLI calls run with `--output json`, `--color no`, a per-invocation
   timeout (30s default) enforced via `context`, stdin closed, and the
   minimal child environment described above. No shell is involved.
 - Calls used: `bws project list`, `bws secret list <project_id>` (one call
@@ -440,9 +769,8 @@ scope in the vault (the directory itself is not required to exist on disk;
   `bws secret edit <id> --value ... --note ...`, and one
   `bws secret delete <id>` call per secret. Individual delete calls provide
   exact successful-prefix state when a later deletion fails.
-  Secret values do appear in bws argv (create/edit take them positionally);
-  this is a bws CLI limitation, is local to the user's own machine and
-  process table, and is documented.
+  Create/edit through this path are legacy-only because values appear in bws
+  argv; secure-mode create/edit use the in-process provider transport.
 - A non-zero exit becomes a provider error carrying bws's redacted stderr.
   Successful list/create/edit calls must return valid JSON. Successful delete
   output is intentionally treated as opaque because supported BWS CLI versions

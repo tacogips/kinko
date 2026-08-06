@@ -39,12 +39,21 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
-| _None_ | | | |
+| _None_ | - | - | - |
 
 ## Completed Plans
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
+| `bws-sync-completion-file-splits.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#providerpayload-and-testing-boundaries` |
+| `bws-sync-completion-provider-config.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#bws-configuration-diagnostics-and-version-gates` |
+| `bws-sync-completion-state-selection.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#compatibility-and-state-format-rules` |
+| `bws-sync-completion-planning.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#granular-conflict-rules` |
+| `bws-sync-completion-checkpoint-execution.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#bounded-retry-progress-and-resume` |
+| `bws-sync-completion-bootstrap.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#cross-machine-bootstrap-and-disaster-recovery` |
+| `bws-sync-completion-maintenance.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#status-reset-reconcile-and-prune` |
+| `bws-sync-completion-cli-doctor.md` | 2026-08-05 | `design-docs/specs/command.md#kinko-sync-with-bws` |
+| `bws-sync-completion-verification.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#providerpayload-and-testing-boundaries` |
 | `permanent-unlock.md` | 2026-08-05 | `design-docs/specs/command.md#kinko-unlock`, `design-docs/specs/architecture.md#lockunlock-session-model` |
 | `bws-sync-foundation.md` | 2026-07-13 | `design-docs/specs/design-bws-sync.md` |
 | `bws-sync-command.md` | 2026-07-13 | `design-docs/specs/design-bws-sync.md` |
@@ -81,17 +90,22 @@ Only plans from eligible phases should be read to minimize context loading.
 | 1 | COMPLETED | - |
 | 2 | COMPLETED | Phase 1 |
 | 3 | COMPLETED | Phase 2 |
+| 4 | COMPLETED | Phase 3 |
+| 5 | COMPLETED | Phase 4 |
+| 6 | COMPLETED | Phase 5 |
+| 7 | COMPLETED | Phase 6 |
 
 ### Phase to Plans Mapping
 
 ```
 PHASE_TO_PLANS = {
-  1: [
-  ],
-  2: [
-  ],
-  3: [
-  ]
+  1: [],
+  2: [],
+  3: [],
+  4: [],
+  5: [],
+  6: [],
+  7: []
 }
 ```
 
@@ -112,6 +126,10 @@ PHASE_TO_PLANS = {
 3. Implement following the deliverable specifications
 4. Update task status and progress log
 5. Mark completion criteria as done
+
+For every Go implementation task, invoke the repository's `go-coding` agent;
+after any Go file modification, invoke `check-and-test-after-modify` before
+updating the plan progress log.
 
 ### Completing a Plan
 

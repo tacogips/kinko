@@ -2,6 +2,7 @@ package kinko
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,69 @@ func TestRunDoctorReportsRandomSessionKeyMetadata(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "OK session-key-source") {
 		t.Fatalf("expected OK diagnostic, got %q", out.String())
+	}
+}
+
+func TestRunDoctorLegacyOutputGolden(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := ensureDirLayout(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := initVault(dataDir, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runDoctor(globalOptions{dataDir: dataDir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	want := "OK session-key-source: vault metadata uses random session key material.\nOK session-token: no corrupt active session diagnostics.\n"
+	if out.String() != want {
+		t.Fatalf("legacy doctor output=%q want %q", out.String(), want)
+	}
+}
+
+func TestDoctorBWSErrorTaxonomyAndRedaction(t *testing.T) {
+	tests := map[string]string{
+		"access token is required":          "missing-credentials",
+		"status 401 unauthorized":           "rejected-or-expired-token",
+		"x509 certificate is not yet valid": "tls-or-clock-failure",
+		"project not found":                 "project-not-found-or-unassigned",
+		"status 403 forbidden":              "read-forbidden",
+		"connection reset":                  "provider-failure",
+	}
+	for message, want := range tests {
+		if got := classifyDoctorBWSError(errors.New(message)); got != want {
+			t.Errorf("classify %q=%q want %q", message, got, want)
+		}
+	}
+	sensitive := "sensitive-doctor-canary-value"
+	err := doctorBWSProviderError("read-forbidden", errors.New(sensitive))
+	if ExitCode(err) != exitCodeProviderFailed || strings.Contains(err.Error(), sensitive) {
+		t.Fatalf("doctor provider error exit=%d err=%q", ExitCode(err), err.Error())
+	}
+}
+
+func TestDoctorBWSOutputGolden(t *testing.T) {
+	result := doctorBWSResult{Checks: []doctorBWSCheck{
+		{Name: "online-auth", Status: "ok", Detail: "accepted"},
+		{Name: "online-read", Status: "failed", Detail: "read-forbidden"},
+		{Name: "write-canary", Status: "failed", Detail: "cleanup required", CleanupID: "secret-id"},
+	}}
+	var textOut bytes.Buffer
+	if err := printDoctorBWSResult(&textOut, result, false); err != nil {
+		t.Fatal(err)
+	}
+	wantText := "ok online-auth: accepted\nfailed online-read: read-forbidden\nfailed write-canary: cleanup required cleanup-id=secret-id\n"
+	if textOut.String() != wantText {
+		t.Fatalf("text=%q want %q", textOut.String(), wantText)
+	}
+	var jsonOut bytes.Buffer
+	if err := printDoctorBWSResult(&jsonOut, result, true); err != nil {
+		t.Fatal(err)
+	}
+	wantJSON := "{\"checks\":[{\"name\":\"online-auth\",\"status\":\"ok\",\"detail\":\"accepted\"},{\"name\":\"online-read\",\"status\":\"failed\",\"detail\":\"read-forbidden\"},{\"name\":\"write-canary\",\"status\":\"failed\",\"detail\":\"cleanup required\",\"cleanup_id\":\"secret-id\"}]}\n"
+	if jsonOut.String() != wantJSON {
+		t.Fatalf("json=%q want %q", jsonOut.String(), wantJSON)
 	}
 }
 
