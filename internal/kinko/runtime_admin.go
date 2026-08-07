@@ -14,7 +14,36 @@ import (
 	"strings"
 )
 
+// runExplosion is the `kinko explosion` command entry point. It delegates
+// its entire behavior to runExplosionFlow so that any other caller needing
+// the same destructive-purge authorization (currently `kinko init`, see
+// app.go) invokes the identical flow rather than a duplicated lookalike
+// gate.
 func runExplosion(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	_, _, err := runExplosionFlow(opts, stdin, stdout, stderr)
+	return err
+}
+
+// runExplosionFlow performs the full explosion authorization and purge
+// sequence: DANGER banner, verified password re-entry, mounted-folder
+// check, the "Are you absolutely sure? [y/N]" confirmation, the
+// confirmation-token entry, and finally the lock-protected, re-validated
+// purge of all vault data files.
+//
+// destroyed is true only when the purge actually ran to completion. A user
+// abort at the y/N prompt or a confirmation-token mismatch prints "aborted"
+// (matching historical runExplosion behavior exactly) and returns
+// destroyed=false with a nil error, not an error.
+//
+// The returned *bufio.Reader is whatever verifyExplosionPassword produced
+// (nil if password verification itself failed before a reader existed), so
+// a caller that still has more line-based input to consume from the same
+// stdin afterward (e.g. `kinko init` reading the new password in the
+// non-terminal case) can continue reading from it instead of losing bytes
+// already buffered ahead by a fresh bufio.Reader. See verifyExplosionPassword's
+// doc comment for the terminal-vs-non-terminal distinction that governs
+// what, if anything, is actually buffered in it.
+func runExplosionFlow(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer) (destroyed bool, reader *bufio.Reader, err error) {
 	_, _ = fmt.Fprintln(stderr, "DANGER: This will permanently delete all vault data in the current data dir.")
 	_, _ = fmt.Fprintln(stderr, "All registered data will be lost and this action cannot be undone.")
 	_, _ = fmt.Fprintln(stderr, "Password re-entry is required for this operation.")
@@ -25,41 +54,41 @@ func runExplosion(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer)
 	// double-buffered between the password step and the rest of this flow.
 	dek, reader, err := verifyExplosionPassword(opts, stdin, stderr)
 	if err != nil {
-		return err
+		return false, nil, err
 	}
 	if err := validateExplosionTarget(opts.dataDir); err != nil {
-		return err
+		return false, reader, err
 	}
 	cfg, err := loadConfig(opts.dataDir, dek)
 	if err != nil {
-		return fmt.Errorf("load encrypted config: %w", err)
+		return false, reader, fmt.Errorf("load encrypted config: %w", err)
 	}
 	records, err := loadFolderRecordsFromConfig(cfg)
 	if err != nil {
-		return err
+		return false, reader, err
 	}
 	if err := ensureNoMountedFolders(opts, records); err != nil {
-		return err
+		return false, reader, err
 	}
 	ok, err := confirmPrompt(reader, stderr, "Are you absolutely sure? [y/N]: ")
 	if err != nil {
-		return err
+		return false, reader, err
 	}
 	if !ok {
 		_, _ = fmt.Fprintln(stdout, "aborted")
-		return nil
+		return false, reader, nil
 	}
 	token := explosionConfirmationToken(opts.dataDir)
 	if _, err := fmt.Fprintf(stderr, "Type confirmation token %q to proceed: ", token); err != nil {
-		return err
+		return false, reader, err
 	}
 	input, err := readSecretFromBuffered(reader)
 	if err != nil {
-		return err
+		return false, reader, err
 	}
 	if input != token {
 		_, _ = fmt.Fprintln(stdout, "aborted")
-		return nil
+		return false, reader, nil
 	}
 
 	// Finding 2: the confirmation-token check above may have taken an
@@ -71,24 +100,24 @@ func runExplosion(opts globalOptions, stdin io.Reader, stdout, stderr io.Writer)
 	// survive) the destroy.
 	release, err := acquireMutationLock(opts.dataDir)
 	if err != nil {
-		return newCLIError(exitCodeLockConflict, "Explosion could not acquire mutation lock.", err)
+		return false, reader, newCLIError(exitCodeLockConflict, "Explosion could not acquire mutation lock.", err)
 	}
 	defer release()
 	if err := validateExplosionTarget(opts.dataDir); err != nil {
-		return err
+		return false, reader, err
 	}
 	if err := validateKinkoDataDirLayout(filepath.Clean(opts.dataDir)); err != nil {
-		return err
+		return false, reader, err
 	}
 
 	if err := deleteSessionWrapKey(opts.dataDir); err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: session wrap key cleanup failed: %v\n", err)
 	}
 	if err := purgeKinkoDataFiles(opts.dataDir); err != nil {
-		return err
+		return false, reader, err
 	}
 	_, _ = fmt.Fprintln(stdout, "explosion completed: kinko data files removed")
-	return nil
+	return true, reader, nil
 }
 
 func validateExplosionTarget(dataDir string) error {
@@ -383,6 +412,32 @@ func writeBootstrapConfig(opts globalOptions) error {
 		return fmt.Errorf("write bootstrap config: %w", err)
 	}
 	return nil
+}
+
+// writeBootstrapConfigAfterInit writes the bootstrap config after a
+// successful `kinko init`, but refuses to overwrite an existing config that
+// already points at a different vault when opts.dataDir came from an
+// explicit --kinko-dir flag or KINKO_DATA_DIR environment variable
+// (opts.dataDirExplicit). Without this guard, initializing a throwaway or
+// secondary vault with an explicit --kinko-dir would silently repoint every
+// subsequent bare `kinko` invocation at that vault, since command
+// options/env already take priority over the bootstrap config at load time
+// (see finalizeOnlyPreflight in cobra_runtime.go).
+//
+// When the data dir was NOT explicit, preflight has already loaded any
+// existing config's kinko_dir into opts.dataDir, so the "existing config
+// points elsewhere" case cannot normally happen; that branch keeps the prior
+// unconditional-overwrite behavior for safety.
+func writeBootstrapConfigAfterInit(opts globalOptions, stderr io.Writer) error {
+	existingDataDir, ok, err := loadBootstrapDataDir(opts.configPath)
+	if err != nil {
+		return err
+	}
+	if ok && existingDataDir != opts.dataDir && opts.dataDirExplicit {
+		_, _ = fmt.Fprintf(stderr, "NOTICE: bootstrap config %s still points to %s; pass --kinko-dir to use the new vault, or edit the config to change the default.\n", opts.configPath, existingDataDir)
+		return nil
+	}
+	return writeBootstrapConfig(opts)
 }
 
 func getSecret(opts globalOptions, key string) (string, bool, error) {

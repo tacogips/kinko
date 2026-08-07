@@ -26,6 +26,13 @@ const (
 	cmdPassword  = "password"
 	cmdDirenv    = "direnv"
 	cmdDoctor    = "doctor"
+	cmdMigration = "migration"
+	cmdSync      = "sync"
+)
+
+const (
+	cmdSyncPush = "push"
+	cmdSyncPull = "pull"
 )
 
 const (

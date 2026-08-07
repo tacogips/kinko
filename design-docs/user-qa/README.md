@@ -15,6 +15,8 @@ Store questions, pending decisions, and items awaiting user approval.
 
 ## Current Items
 
+- [qa-bws-sync.md](./qa-bws-sync.md) - BWS sync design decisions taken by default (scope hashing, deletion propagation, token precedence, force-pull)
+- [qa-kinko-mvp-decisions.md](./qa-kinko-mvp-decisions.md) - Kinko MVP design decisions
 - [qa-example.md](./qa-example.md) - Example: Database Selection (template example)
 - [pending-example.md](./pending-example.md) - Example: CLI Output Format (template example)
 

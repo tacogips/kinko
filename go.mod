@@ -2,6 +2,8 @@ module github.com/tacogips/kinko
 
 go 1.25.4
 
+toolchain go1.25.8
+
 require (
 	github.com/spf13/cobra v1.8.1
 	github.com/zalando/go-keyring v0.2.6

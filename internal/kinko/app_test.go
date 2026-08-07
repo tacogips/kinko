@@ -3,6 +3,7 @@ package kinko
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,6 +278,120 @@ func TestRunInit_TrimsWhitespaceFromPassword(t *testing.T) {
 	}
 	if err := unlockSession(opts.dataDir, 5*time.Minute, "  pw123456  "); err == nil {
 		t.Fatal("untrimmed password should not unlock")
+	}
+}
+
+func TestRunInit_ExplicitKinkoDirDoesNotOverwriteExistingConfigPointingElsewhere(t *testing.T) {
+	withFakeSessionStore(t)
+	configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
+	otherDataDir := filepath.Join(t.TempDir(), "other-vault")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("kinko_dir=%q\n", otherDataDir)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	newDataDir := filepath.Join(t.TempDir(), "throwaway-vault")
+	opts := globalOptions{
+		dataDir:         newDataDir,
+		dataDirExplicit: true,
+		configPath:      configPath,
+		force:           true,
+		confirm:         false,
+	}
+	in := strings.NewReader("pw\npw\n")
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := runInit(opts, nil, in, &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "initialized") {
+		t.Fatalf("expected the new vault to still be initialized, got stdout: %q", out.String())
+	}
+	if !isInitializedDataDir(newDataDir) {
+		t.Fatal("expected new data dir to be initialized despite config not being rewritten")
+	}
+	if !strings.Contains(errBuf.String(), "NOTICE:") || !strings.Contains(errBuf.String(), configPath) {
+		t.Fatalf("expected a NOTICE mentioning the config path, got stderr: %q", errBuf.String())
+	}
+
+	gotDataDir, ok, err := loadBootstrapDataDir(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected bootstrap config to still be readable")
+	}
+	if gotDataDir != filepath.Clean(otherDataDir) {
+		t.Fatalf("expected bootstrap config to remain pointed at %q, got %q", otherDataDir, gotDataDir)
+	}
+}
+
+func TestRunInit_WritesConfigWhenNoneExists(t *testing.T) {
+	withFakeSessionStore(t)
+	configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
+	dataDir := filepath.Join(t.TempDir(), "data")
+	opts := globalOptions{
+		dataDir:         dataDir,
+		dataDirExplicit: true,
+		configPath:      configPath,
+		force:           true,
+		confirm:         false,
+	}
+	in := strings.NewReader("pw\npw\n")
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := runInit(opts, nil, in, &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(errBuf.String(), "NOTICE:") {
+		t.Fatalf("did not expect a NOTICE when no config previously existed, got stderr: %q", errBuf.String())
+	}
+
+	gotDataDir, ok, err := loadBootstrapDataDir(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected bootstrap config to be written")
+	}
+	if gotDataDir != filepath.Clean(dataDir) {
+		t.Fatalf("expected bootstrap config to point at %q, got %q", dataDir, gotDataDir)
+	}
+}
+
+func TestRunInit_ExistingConfigPointingAtSameDirSucceeds(t *testing.T) {
+	withFakeSessionStore(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	configPath := filepath.Join(t.TempDir(), "bootstrap.toml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("kinko_dir=%q\n", dataDir)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := globalOptions{
+		dataDir:         dataDir,
+		dataDirExplicit: true,
+		configPath:      configPath,
+		force:           true,
+		confirm:         false,
+	}
+	in := strings.NewReader("pw\npw\n")
+	var out bytes.Buffer
+	var errBuf bytes.Buffer
+	if err := runInit(opts, nil, in, &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(errBuf.String(), "NOTICE:") {
+		t.Fatalf("did not expect a NOTICE when the config already pointed at the same dir, got stderr: %q", errBuf.String())
+	}
+
+	gotDataDir, ok, err := loadBootstrapDataDir(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected bootstrap config to still be readable")
+	}
+	if gotDataDir != filepath.Clean(dataDir) {
+		t.Fatalf("expected bootstrap config to point at %q, got %q", dataDir, gotDataDir)
 	}
 }
 

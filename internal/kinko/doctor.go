@@ -22,6 +22,13 @@ func runDoctor(opts globalOptions, stdout io.Writer) error {
 	}
 
 	warned := false
+	if meta.MachineID == "" {
+		_, _ = fmt.Fprintln(stdout, "WARNING machine-id: machine_id is missing; run 'kinko migration' to assign it.")
+		warned = true
+	} else if !isValidMachineID(meta.MachineID) {
+		_, _ = fmt.Fprintln(stdout, "WARNING machine-id: machine_id is invalid; restore valid metadata before using sync.")
+		warned = true
+	}
 	if usesLegacyPasswordDerivedSessionKey(meta) {
 		_, _ = fmt.Fprintln(stdout, "WARNING legacy-session-key: session_key_source is missing; unlock once with this release, rotate the vault password, and treat old meta.v1.json backups as sensitive.")
 		warned = true

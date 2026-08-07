@@ -76,7 +76,10 @@ func verifyVaultPasswordValue(opts globalOptions, password string) ([]byte, erro
 	}
 	dek, err := unwrapDEKWithPassword(meta, password)
 	if err != nil {
-		return nil, errors.New("password verification failed")
+		if errors.Is(err, errDecryptFailed) {
+			return nil, newCLIError(exitCodeAuthFailed, "password verification failed", err)
+		}
+		return nil, newCLIError(exitCodeMetadataInvalid, "vault password metadata is invalid", err)
 	}
 	return dek, nil
 }

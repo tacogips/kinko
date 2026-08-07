@@ -41,6 +41,28 @@ kinko init
 kinko init --kinko-dir ~/.local/kinko --config ~/.config/kinko/bootstrap.toml
 ```
 
+`init` writes `kinko_dir` into the bootstrap config at `--config` only when
+that file is absent or already points at the same data directory. If the
+file exists and points elsewhere, an explicit `--kinko-dir`/`KINKO_DATA_DIR`
+is never allowed to rewrite it (a NOTICE is printed instead); this keeps
+initializing a secondary/throwaway vault from silently repointing bare
+`kinko` invocations away from the existing default vault.
+
+If the target data dir already contains a fully initialized vault, `init`
+does not simply refuse. It instead requires and runs the exact same
+authorization flow as `kinko explosion` (verified password re-entry, the
+"Are you absolutely sure? [y/N]" confirmation, and the confirmation-token
+entry) before destroying that vault, and only then proceeds to create the
+fresh one. This calls the same shared flow `kinko explosion` uses, not a
+separate lookalike confirmation. Aborting at either the y/N prompt or the
+confirmation-token prompt prints `aborted` and leaves the existing vault
+completely untouched; `init` performs no changes in that case.
+
+A data dir holding only partial or broken vault artifacts (not a complete,
+valid vault) is still refused outright rather than entering the explosion
+flow, since there is no valid vault to authenticate a password against in
+that state; move it aside or run `kinko explosion` first.
+
 ### `kinko lock`
 
 Immediately lock the current kinko session.
@@ -107,6 +129,126 @@ Exit codes:
 - `13`: persistence / I/O failure
 - `14`: metadata/KDF parameters rejected by safety validation
 
+### `kinko migration`
+
+Inspect and apply backward-compatible vault metadata migrations.
+
+```bash
+kinko migration [--yes|-y] [--json]
+```
+
+Behavior:
+- Preview is the default. It lists named pending steps without changing the
+  vault or requesting the vault password.
+- `--yes`/`-y` verifies the vault password, acquires the mutation lock, and
+  persists all still-pending steps through the atomic metadata rewrite path.
+- `--json` emits the mode and each step's `name`, `pending`, and `applied`
+  fields without secret values.
+- The initial migration step is `assign-machine-id`, which gives legacy
+  vaults the 16-lowercase-hex `machine_id` now created by `kinko init`.
+- A repeat invocation with no remaining work succeeds and reports
+  `no pending migrations`.
+
+Exit codes:
+- `0`: preview, successful apply, or no pending migrations
+- `10`: vault password authentication failed
+- `11`: policy/argument validation failed
+- `12`: mutation lock conflict
+- `13`: metadata read/write or other local I/O failure
+- `14`: malformed or safety-invalid metadata
+
+### `kinko sync` with BWS
+
+Synchronize selected secret-entry payloads with Bitwarden Secrets Manager.
+Existing push/pull syntax and defaults remain compatible.
+
+```bash
+kinko sync push --provider=bws [--force] [--dry-run] [--project-id <id>] [--json]
+kinko sync pull --provider=bws [--force] [--dry-run] [--project-id <id>] [--json]
+kinko --force sync push --provider=bws
+kinko sync bootstrap --provider=bws --from-machine-id <id> [--merge] [--yes]
+kinko sync status --provider=bws [--online]
+kinko sync reset --provider=bws [--checkpoint|--baseline] [--yes]
+kinko sync reconcile --provider=bws [--upgrade-metadata] [--yes]
+kinko sync prune --provider=bws [--machine-id <id> --ack-retired-machine <id>] [--secret-id <id>]... [--ack-malformed] [--yes]
+```
+
+Behavior:
+- Both directions require vault password re-entry before scope enumeration or
+  provider access and acquire the vault mutation lock.
+- `--provider` is required; `bws` is the first provider. The provider/payload
+  contract is extensible, but only `secret-entry/v1` is enabled.
+- `--dry-run` prints the complete value-free action plan without changing the
+  vault, encrypted sync state, or BWS.
+- `--force` is the root persistent flag. For sync it preserves the existing
+  "command direction wins" rule: local wins push and remote wins pull. It
+  cannot be combined with explicit `--on-conflict` or `--resolve`, and never
+  bypasses selection, duplicate-name, note, project, or revision validation.
+- Push/pull/bootstrap/status/reset/reconcile/prune accept repeatable
+  `--select-profile`, `--select-path`, `--select-key`, `--exclude-profile`,
+  `--exclude-path`, and
+  `--exclude-key`, plus `--shared=include|exclude|only`. Exclusions win and
+  unselected entries/state are untouched. `glob:` explicitly introduces key
+  glob matching.
+- `--map-path <anchor>=<absolute-root>` is repeatable and materializes portable
+  logical scopes. Persistent maps live in encrypted config `sync.paths.v1`.
+- `--select-path` and `--exclude-path` require `logical:<portable-path>` or
+  `local:<absolute-path>`; this prevents legacy absolute and portable identity
+  from being confused. Existing root `--profile`/`--path` remain ignored.
+- `--on-conflict=fail|local|remote|skip` sets a default; repeatable
+  `--resolve <entry-id>=local|remote|delete-local|delete-remote|skip` resolves
+  the exact value-free ids emitted by the current plan.
+  `--delete=auto|keep|confirm` controls baseline-proven deletion. `auto`
+  preserves existing behavior; `confirm` requires `--yes` when needed.
+- `--project-id` overrides `KINKO_BWS_PROJECT_ID`, encrypted config key
+  `sync.bws.project_id`, and sole-project auto-resolution.
+- `--bws-config-file`, `--bws-profile`, and `--bws-server-url` resolve after
+  flags from corresponding `KINKO_BWS_*` variables, encrypted config, then
+  BWS defaults. Parent `BWS_CONFIG_FILE`, `BWS_PROFILE`, and `BWS_SERVER_URL`
+  are ignored. `--bws-transport=auto` requires an available, approved
+  value-safe capability for create/update and never falls back. The current
+  CLI mutation adapter is available only with both
+  `--bws-transport=cli-legacy` and `--allow-secret-argv`, and always warns.
+- `--max-retries`, `--retry-max-delay`, `--resume=auto|require|never`, and
+  `--progress=auto|plain|none|jsonl` control bounded retry/checkpoint behavior
+  and value-free stderr progress without changing final stdout JSON.
+- `--json` emits stable counts, actions, scope metadata, and conflict reasons;
+  secret values and token values are never emitted.
+- `KINKO_BWS_ACCESS_TOKEN` overrides the same-named shared secret.
+  `BWS_ACCESS_TOKEN` is ignored and cannot leak into the isolated child
+  environment. `KINKO_BWS_BIN` selects a custom `bws` executable.
+- Push records confirmed remote actions in an encrypted, value-free resumable
+  checkpoint. Pull/bootstrap revalidate their pinned remote read set and write
+  all vault changes once before persisting the encrypted baseline or
+  provenance.
+- A deletion is propagated only when the encrypted baseline proves the entry
+  was previously synchronized and the surviving side is unchanged. `sync
+  prune` is preview-first orphan cleanup; `path prune-missing` remains local
+  filesystem-scope cleanup.
+- `bootstrap` copies a named source-machine namespace into the current
+  machine identity and never mutates the source. `status` is read-only.
+  `reset` changes only baseline/checkpoint state. `reconcile` adopts only exact
+  matches. `prune` requires `--yes`; a different namespace additionally needs
+  matching `--machine-id` and `--ack-retired-machine`, and malformed cleanup
+  needs exact `--secret-id` values plus `--ack-malformed`.
+- `kinko doctor --provider=bws` preserves ordinary `kinko doctor` behavior and
+  adds local provider checks. `--online` checks auth/project/read access;
+  `--check-write --yes` alone performs a create/read/delete canary.
+
+Exit codes:
+- `0`: success, including a successful dry-run
+- `10`: vault password authentication failed
+- `11`: invalid flags/provider/project, missing machine id, scope collision,
+  or ambiguous/malformed remote metadata
+- `12`: mutation lock conflict
+- `13`: local persistence or I/O failure
+- `14`: malformed encrypted vault/config/sync-state metadata
+- `15`: unresolved synchronization conflict
+- `16`: missing/failing/timed-out `bws` process or invalid provider JSON
+
+Detailed data model and decision tables:
+`design-docs/specs/design-bws-sync.md`.
+
 ### `kinko status`
 
 Show lock state, active timeout, data dir, and current path/profile resolution.
@@ -121,6 +263,12 @@ Folder-vault interaction:
 - The command refuses to proceed while any registered folder is mounted.
 - Confirmed explosion removes root `folders/` storage together with the core
   vault files.
+
+`kinko init` reuses this identical authorization-and-purge flow (verified
+password re-entry, y/N confirmation, confirmation token, locked and
+re-validated purge) when it is asked to initialize a data dir that already
+holds a fully initialized vault, rather than a duplicated confirmation
+gate; see `kinko init` above.
 
 ### `kinko folder`
 
@@ -786,6 +934,8 @@ These commands are design ideas and are not shipped behavior yet:
 Run local diagnostics: permissions, lock-state health, config validity, vault integrity.
 
 Current diagnostics include:
+- Warn when `meta.v1.json` has no `machine_id` and direct the user to
+  `kinko migration`; the warning disappears after successful migration.
 - Warn when `meta.v1.json` has no `session_key_source`, which identifies
   pre-migration session metadata. Users should unlock once with a current
   release, rotate the vault password, and treat old `meta.v1.json` backups as
@@ -797,7 +947,7 @@ Current diagnostics include:
 |------|------|---------|-------------|
 | `--profile` | string | `default` | Profile name |
 | `--path` | string | current directory | Logical path scope for key lookup |
-| `--kinko-dir` | string | `KINKO_DATA_DIR`, bootstrap `kinko_dir`, or `~/.local/kinko` | Data directory |
+| `--kinko-dir` | string | `KINKO_DATA_DIR`, bootstrap `kinko_dir`, or `~/.local/kinko` | Data directory. An explicit flag or `KINKO_DATA_DIR` always wins over the bootstrap config for the current invocation, but `kinko init` never uses it to rewrite an existing config that already points at a different directory (see `kinko init` above). |
 | `--config` | string | `~/.config/kinko/bootstrap.toml` | Bootstrap config path |
 | `--keychain-preflight` | enum | `required` | Keychain preflight mode: `required`, `best-effort`, or `off` |
 | `--force` | bool | `false` | Override non-TTY / redirection guardrails |
@@ -817,6 +967,14 @@ Current diagnostics include:
 | `import` | optional shell argument, `--file`, `--yes`/`-y`, `--confirm-with-values`, `--allow-shared` |
 | `exec` | `--all`, `--env` |
 | `password change` | `--current-stdin`, `--new-stdin`, `--current-fd`, `--new-fd`, `--force-tty` |
+| `migration` | `--yes`/`-y`, `--json` |
+| `sync push`, `sync pull` | `--provider`, `--dry-run`, `--project-id`, selectors/exclusions, `--shared`, `--map-path`, `--on-conflict`, `--resolve`, `--delete`, BWS runtime/transport flags, retry/resume/progress flags, `--json` (`--force` is persistent) |
+| `sync bootstrap` | push/pull common flags, `--from-machine-id`, `--merge`, `--yes`/`-y` |
+| `sync status` | selectors/exclusions, `--online`, BWS runtime flags, `--json` |
+| `sync reset` | selectors/exclusions, `--checkpoint`, `--baseline`, `--yes`/`-y`, `--json` |
+| `sync reconcile` | selectors/exclusions, `--upgrade-metadata`, `--yes`/`-y`, `--json` |
+| `sync prune` | selectors/exclusions, `--machine-id`, `--ack-retired-machine`, repeatable `--secret-id`, `--ack-malformed`, `--prune-empty-scopes`, `--yes`/`-y`, `--json` |
+| `doctor` BWS mode | `--provider=bws`, `--online`, `--check-write`, `--yes`/`-y`, `--json` |
 | `folder remove` | `--keep-storage`, `--yes`/`-y` |
 
 ### Environment Variables
@@ -828,6 +986,12 @@ Current diagnostics include:
 | `KINKO_DATA_DIR` | No | `~/.local/kinko` | Data directory override |
 | `KINKO_CONFIG` | No | `~/.config/kinko/bootstrap.toml` | Bootstrap config override |
 | `KINKO_KEYCHAIN_PREFLIGHT` | No | `required` | Keychain preflight mode override |
+| `KINKO_BWS_ACCESS_TOKEN` | For BWS sync unless stored as a shared secret | - | Token supplied only to the selected isolated provider transport |
+| `KINKO_BWS_PROJECT_ID` | No | encrypted config or sole project | BWS project id override |
+| `KINKO_BWS_BIN` | No | `bws` from `PATH` | BWS executable path or name |
+| `KINKO_BWS_CONFIG_FILE` | No | encrypted config or BWS default | Explicit BWS config file; parent `BWS_CONFIG_FILE` is ignored |
+| `KINKO_BWS_PROFILE` | No | encrypted config or BWS default | Explicit BWS config profile; parent `BWS_PROFILE` is ignored |
+| `KINKO_BWS_SERVER_URL` | No | encrypted config or BWS default | Explicit BWS endpoint; parent `BWS_SERVER_URL` is ignored |
 
 ## Integration Use Cases
 
@@ -861,6 +1025,8 @@ Operational notes:
 | 12 | Lock conflict / concurrent mutation (command-specific `cliError`) |
 | 13 | Persistence / I/O failure (command-specific `cliError`) |
 | 14 | Metadata/KDF validation failure (command-specific `cliError`) |
+| 15 | Synchronization conflict |
+| 16 | Remote provider failure |
 
 Implementation note:
 - `ExitCode(err)` returns child process exit status for `kinko exec` when the
@@ -878,6 +1044,17 @@ Current command-specific structured mappings:
 | `password change` | Mutation lock conflict | `12` |
 | `password change` | Persistence / I/O failure | `13` |
 | `password change` | Metadata/KDF validation failure | `14` |
+| `migration` | Current password authentication failure | `10` |
+| `migration` | Invalid metadata policy failure | `11` or `14` |
+| `migration` | Mutation lock conflict | `12` |
+| `migration` | Metadata persistence / I/O failure | `13` |
+| `sync push` / `sync pull` | Current password authentication failure | `10` |
+| `sync push` / `sync pull` | Policy, project, scope, or remote metadata validation | `11` |
+| `sync push` / `sync pull` | Mutation lock conflict | `12` |
+| `sync push` / `sync pull` | Local persistence / I/O failure | `13` |
+| `sync push` / `sync pull` | Invalid encrypted metadata or sync state | `14` |
+| `sync push` / `sync pull` | Divergent values or deletion conflict | `15` |
+| `sync push` / `sync pull` | Missing/failing/timed-out provider or invalid JSON | `16` |
 | `unlock` | Current password authentication failure | `10` |
 | `unlock` | Invalid arguments / timeout policy failure | `11` |
 | `unlock` | Session/keychain persistence / I/O failure | `13` |

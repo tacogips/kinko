@@ -55,11 +55,12 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 	root.PersistentFlags().StringVar(&ctx.opts.dataDir, "kinko-dir", defaults.dataDir, "kinko data dir")
 	root.PersistentFlags().StringVar(&ctx.opts.configPath, "config", defaults.configPath, "bootstrap config path")
 	root.PersistentFlags().StringVar(&ctx.opts.keychainPreflight, "keychain-preflight", defaults.keychainPreflight, "keychain preflight mode: required|best-effort|off")
-	root.PersistentFlags().BoolVar(&ctx.opts.force, "force", defaults.force, "override non-tty/redirection guardrails")
+	root.PersistentFlags().BoolVar(&ctx.opts.force, "force", defaults.force, "override non-tty/redirection guardrails; for sync, make the command direction authoritative on conflicts")
 	root.PersistentFlags().BoolVar(&ctx.opts.confirm, "confirm", defaults.confirm, "confirm sensitive tty output")
 
 	finalizeOnlyPreflight := func() error {
 		dataDirExplicit := root.PersistentFlags().Changed("kinko-dir") || os.Getenv("KINKO_DATA_DIR") != ""
+		ctx.opts.dataDirExplicit = dataDirExplicit
 		if !dataDirExplicit {
 			dataDir, ok, err := loadBootstrapDataDir(ctx.opts.configPath)
 			if err != nil {
@@ -150,23 +151,11 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 		newDirenvCommand(ctx, preflight, func() bool { return root.PersistentFlags().Changed("path") }),
 		newPasswordCommand(ctx, preflight),
 		newDoctorCommand(ctx, finalizeOnlyPreflight),
+		newMigrationCommand(ctx, finalizeOnlyPreflight),
+		newSyncCommand(ctx, preflight),
 	)
 
 	return root, nil
-}
-
-func newDoctorCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
-	return &cobra.Command{
-		Use:   cmdDoctor,
-		Short: "Run local diagnostics",
-		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			if err := preflight(); err != nil {
-				return err
-			}
-			return runDoctor(ctx.opts, ctx.stdout)
-		},
-	}
 }
 
 func newBackupCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {
