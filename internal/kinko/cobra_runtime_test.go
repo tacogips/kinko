@@ -42,6 +42,7 @@ func TestRuntimeRootCommandSurface(t *testing.T) {
 		cmdExport,
 		cmdFolder,
 		cmdGet,
+		cmdHook,
 		cmdImport,
 		cmdInit,
 		cmdLock,

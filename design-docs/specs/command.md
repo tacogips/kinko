@@ -780,6 +780,44 @@ eval "$(kinko direnv export)"
 eval "$(kinko direnv export bash --exclude AWS_SECRET_ACCESS_KEY)"
 ```
 
+### `kinko hook enter|leave [shell]`
+
+Emit shell code for directory lifecycle hooks. The initial supported shell is
+`bash`; unsupported shell names fail with a usage error.
+
+`kinko hook enter bash`:
+- resolves the active profile and path using the normal global options
+- applies non-interactive-safe export behavior internally
+- emits a reserved `KINKO_HOOK_KEYS` variable containing only exported key names
+- emits the resolved secret exports after the tracking variable
+- excludes `KINKO_HOOK_KEYS` from vault-derived exports
+
+`kinko hook leave bash`:
+- does not read or unlock the vault
+- validates names inherited through `KINKO_HOOK_KEYS`
+- emits `unset` statements for every tracked key and the tracking variable
+- emits only the tracking-variable unset when no active hook state exists
+
+Examples:
+
+```bash
+eval "$(kinko --path "$MISE_PROJECT_ROOT" hook enter bash)"
+eval "$(kinko hook leave bash)"
+```
+
+Lifecycle limitations:
+- leaving unsets injected variables; it does not restore values that existed
+  before entry
+- nested hook activation replaces the prior tracking list
+- callers must evaluate the emitted shell code in the current shell
+
+Security requirements:
+- enter output is plaintext-sensitive and follows the same safe
+  non-interactive behavior as `direnv export`
+- leave output contains names only and never secret values
+- invalid or manipulated tracking names are rejected before rendering shell
+  code
+
 ### `kinko import [shell]`
 
 Parse shell-specific assignment content and import it into the resolved profile/path scope.

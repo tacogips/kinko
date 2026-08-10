@@ -409,8 +409,7 @@ sequenceDiagram
 
 - Canonical version file: `internal/build/VERSION`
 - Used by:
-  - Nix build (`flake.nix` ldflags)
-  - Task build (`Taskfile.yml` ldflags)
+  - mise build task (`mise.toml` ldflags)
   - Runtime command: `kinko version`
 
 ## Release Artifacts and Checksums
@@ -451,17 +450,11 @@ kinko version
 
 ## Build
 
-### Nix
+### mise
 
 ```bash
-nix build .#kinko
-./result/bin/kinko version
-```
-
-### Task
-
-```bash
-task build
+mise install
+mise run build
 ./kinko version
 ```
 
@@ -699,35 +692,39 @@ Notes:
 - `--current-stdin` and `--new-stdin` must be used together.
 - `--current-fd` and `--new-fd` must be used together.
 
-## direnv Example
+## mise Environment Hook
 
-Add this once to your shell startup file so `.envrc` is applied automatically:
-
-- `bash`: `eval "$(direnv hook bash)"`
-- `zsh`: `eval "$(direnv hook zsh)"`
-- `fish`: `direnv hook fish | source`
-
-`.envrc`:
+Enable mise once in Bash, then add these hooks to a project `mise.toml`:
 
 ```bash
-export KINKO_PROFILE=default
-KINKO_SCOPE_DIR="${DIRENV_DIR#-}"
-export KINKO_DATA_DIR="${KINKO_SCOPE_DIR}/.direnv/kinko"
-if command -v kinko >/dev/null 2>&1; then
-  eval "$(kinko direnv export)"
-fi
+eval "$(mise activate bash)"
 ```
 
-Then run `direnv allow` once in the repository root.
+```toml
+[[hooks.enter]]
+shell = "bash"
+script = '''
+if command -v kinko >/dev/null 2>&1 && kinko hook --help >/dev/null 2>&1; then
+  eval "$(kinko --path "$MISE_PROJECT_ROOT" hook enter bash)"
+fi
+'''
 
-`kinko direnv export` automatically:
-- resolves scope from `DIRENV_DIR`
-- uses `bash` output by default
-- applies non-interactive-safe behavior (`--force`, `--confirm=false`)
-- works safely with a command existence guard in `.envrc`
-- supports `--shared-only` to export only shared scope keys
+[[hooks.leave]]
+shell = "bash"
+script = '''
+if command -v kinko >/dev/null 2>&1 && kinko hook --help >/dev/null 2>&1; then
+  eval "$(kinko hook leave bash)"
+fi
+'''
+```
 
-### Without direnv (load from shell startup files)
+`kinko hook enter` applies safe non-interactive export behavior and records only
+the injected variable names. `kinko hook leave` does not access the vault; it
+validates that tracking list and emits the corresponding `unset` statements.
+The command-existence/help guard makes the integration optional for users who
+do not have kinko, or who still have an older release installed.
+
+### Shell startup without directory switching
 
 If you do not want directory-based switching, you can load variables directly from `kinko` in your shell startup file.
 This loads shared scope only at shell startup (no `--path` required).
@@ -762,21 +759,21 @@ Notes:
 
 ## Dev Task Shortcuts
 
-`Taskfile.yml` includes local helper commands with isolated paths under `/tmp/kinko-dev`.
+`mise.toml` includes local helper commands with isolated paths under `/tmp/kinko-dev`.
 
 ```bash
-task dev-init
-task dev-unlock
-task dev-set -- 'A=123'
-task dev-set-key -- 'A --value 123'
-task dev-get -- A            # reveal by default
-task dev-show                # reveal by default
-task dev-export              # default shell: posix
-task dev-export -- 'fish'    # override shell
+mise run dev-init
+mise run dev-unlock
+mise run dev-set -- A=123
+mise run dev-set-key -- A --value 123
+mise run dev-get -- A            # reveal by default
+mise run dev-show                # reveal by default
+mise run dev-export              # default shell: posix
+mise run dev-export -- fish      # override shell
 ```
 
 Note:
-- For `dev-set`, pass assignments after `--` so Task forwards them to `kinko set`.
+- For tasks with command arguments, pass them after `--` so mise forwards them to kinko.
 
 Important:
 - Do not use `--path "$PWD"` in `.envrc` if you want a fixed parent scope.
@@ -837,6 +834,7 @@ kinko migration [--yes|-y] [--json]
 kinko sync push --provider=bws [--force] [--dry-run] [--project-id <id>] [--json]
 kinko sync pull --provider=bws [--force] [--dry-run] [--project-id <id>] [--json]
 kinko export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
+kinko hook enter|leave [shell]
 kinko direnv export [shell] [--shared-only] [--with-scope-comments] [--exclude <k1,k2>]...
 kinko import [shell] [--file <path>] [--yes|-y] [--confirm-with-values] [--allow-shared]
 kinko exec (--all|--env <k1,k2>) -- <command...>

@@ -45,6 +45,7 @@ Large features are split into multiple related plans with cross-references.
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|
+| `hook-environment-lifecycle.md` | 2026-08-10 | `design-docs/specs/command.md#kinko-hook-enterleave-shell` |
 | `bws-sync-completion-file-splits.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#providerpayload-and-testing-boundaries` |
 | `bws-sync-completion-provider-config.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#bws-configuration-diagnostics-and-version-gates` |
 | `bws-sync-completion-state-selection.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#compatibility-and-state-format-rules` |

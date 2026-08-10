@@ -1,0 +1,201 @@
+min_version = "2026.8.3"
+
+[[hooks.enter]]
+shell = "bash"
+script = '''
+if command -v kinko >/dev/null 2>&1 && kinko hook --help >/dev/null 2>&1; then
+  eval "$(kinko --path "$MISE_PROJECT_ROOT" hook enter bash)"
+fi
+'''
+
+[[hooks.leave]]
+shell = "bash"
+script = '''
+if command -v kinko >/dev/null 2>&1 && kinko hook --help >/dev/null 2>&1; then
+  eval "$(kinko hook leave bash)"
+fi
+'''
+
+[tools]
+go = "latest"
+golangci-lint = "latest"
+ripgrep = "latest"
+shellcheck = "latest"
+"go:golang.org/x/tools/gopls" = "latest"
+"go:golang.org/x/tools/cmd/goimports" = "latest"
+
+[env]
+GOPATH = "{{env.HOME}}/.cache/go/github.com/tacogips/kinko"
+GOMODCACHE = "{{env.HOME}}/.cache/go/mod"
+KINKO_CMD_PATH = "./cmd/kinko"
+KINKO_VERSION_FILE = "internal/build/VERSION"
+
+[tasks.default]
+description = "Show available tasks"
+run = "mise tasks ls"
+
+[tasks.build]
+description = "Build the binary"
+run = '''
+version=$(<"$KINKO_VERSION_FILE")
+go build -ldflags "-s -w -X github.com/tacogips/kinko/internal/build.version=$version" -o kinko "$KINKO_CMD_PATH"
+'''
+
+[tasks.run]
+description = "Run kinko without arguments"
+run = "go run $KINKO_CMD_PATH"
+
+[tasks.run-args]
+description = "Run kinko with explicit command arguments"
+run = 'go run "$KINKO_CMD_PATH" "$@"'
+
+[tasks.init]
+description = "Initialize kinko vault/config interactively"
+run = "go run $KINKO_CMD_PATH init"
+
+[tasks.dev-prepare]
+description = "Create isolated development directories"
+run = '''
+dev_root="${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}"
+mkdir -p "$dev_root/data" "$dev_root/config"
+'''
+
+[tasks.dev-run-args]
+description = "Run kinko with isolated development paths and explicit arguments"
+depends = ["dev-prepare"]
+run = '''
+dev_root="${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}"
+go run "$KINKO_CMD_PATH" --kinko-dir "$dev_root/data" --config "$dev_root/config/bootstrap.toml" "$@"
+'''
+
+[tasks.dev-run]
+description = "Run kinko without arguments using isolated development paths"
+run = "mise run dev-run-args"
+
+[tasks.dev-init]
+description = "Initialize kinko interactively using isolated development paths"
+run = 'mise run dev-run-args -- init "$@"'
+
+[tasks.dev-clean]
+description = "Remove isolated development data/config paths"
+run = '''
+dev_root="${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}"
+rm -rf "$dev_root"
+'''
+
+[tasks.dev-info]
+description = "Show isolated development path configuration"
+run = '''
+dev_root="${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}"
+echo "DEV_ROOT=$dev_root"
+echo "DEV_KINKO_DIR=$dev_root/data"
+echo "DEV_CONFIG_PATH=$dev_root/config/bootstrap.toml"
+'''
+
+[tasks.dev-version]
+description = "Run kinko version using isolated development paths"
+run = "mise run dev-run-args -- version"
+
+[tasks.dev-status]
+description = "Run kinko status using isolated development paths"
+run = "mise run dev-run-args -- status"
+
+[tasks.dev-unlock]
+description = "Run kinko unlock interactively using isolated development paths"
+run = 'mise run dev-run-args -- unlock "$@"'
+
+[tasks.dev-lock]
+description = "Run kinko lock using isolated development paths"
+run = "mise run dev-run-args -- lock"
+
+[tasks.dev-set]
+description = "Run kinko set using isolated development paths"
+run = 'mise run dev-run-args -- set "$@"'
+
+[tasks.dev-set-key]
+description = "Run kinko set-key using isolated development paths"
+run = 'mise run dev-run-args -- set-key "$@"'
+
+[tasks.dev-get]
+description = "Run kinko get --reveal using isolated development paths"
+run = 'mise run dev-run-args -- --force --confirm=false get --reveal "$@"'
+
+[tasks.dev-show]
+description = "Run kinko show --reveal using isolated development paths"
+run = "mise run dev-run-args -- --force --confirm=false show --reveal"
+
+[tasks.dev-delete]
+description = "Run kinko delete using isolated development paths"
+run = 'mise run dev-run-args -- delete "$@"'
+
+[tasks.dev-delete-all]
+description = "Run kinko delete --all --yes using isolated development paths"
+run = "mise run dev-run-args -- delete --all --yes"
+
+[tasks.dev-explosion]
+description = "Run kinko explosion using isolated development paths"
+run = "mise run dev-run-args -- explosion"
+
+[tasks.dev-export]
+description = "Run kinko export using isolated development paths"
+run = '''
+shell_name="${1:-posix}"
+mise run dev-run-args -- --force --confirm=false export "$shell_name"
+'''
+
+[tasks.dev-exec]
+description = "Run kinko exec using isolated development paths"
+run = 'mise run dev-run-args -- exec "$@"'
+
+[tasks.dev-config-show]
+description = "Run kinko config show using isolated development paths"
+run = "mise run dev-run-args -- config show"
+
+[tasks.dev-config-set]
+description = "Run kinko config set using isolated development paths"
+run = 'mise run dev-run-args -- config set "$@"'
+
+[tasks.dev-e2e]
+description = "Run automated end-to-end checks on isolated development paths"
+run = "./scripts/dev-e2e.sh"
+
+[tasks.smoke]
+description = "Run local smoke checks for kinko behavior"
+depends = ["build"]
+run = '''
+set -euo pipefail
+./kinko version | rg '^[0-9]+\.[0-9]+\.[0-9]+$|^dev$'
+go test ./...
+go build ./...
+'''
+
+[tasks.test]
+description = "Run tests"
+run = "go test -v ./..."
+
+[tasks.test-coverage]
+description = "Run tests with coverage"
+run = '''
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
+'''
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run ./..."
+
+[tasks.fmt]
+description = "Format Go code"
+run = "go fmt ./..."
+
+[tasks.vet]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.clean]
+description = "Clean build and coverage artifacts"
+run = "rm -f kinko coverage.out coverage.html"
+
+[tasks.tidy]
+description = "Tidy Go modules"
+run = "go mod tidy"

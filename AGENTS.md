@@ -129,20 +129,19 @@ feat: implement user authentication system
 
 ## Project Overview
 
-This is kinko - a Golang project with Nix flake development environment support.
+This is kinko, a Go project with a mise-managed development environment.
 
 ## Development Environment
 - **Language**: Go
-- **Build Tool**: go-task (Task runner)
-- **Environment Manager**: Nix flakes + direnv
-- **Development Shell**: Run `nix develop` or use direnv to activate
+- **Task Runner**: mise
+- **Environment Manager**: mise
+- **Development Shell**: Enable `mise activate` and run `mise install`
 
 ## Project Structure
 ```
 .
-├── flake.nix          # Nix flake configuration for Go development
-├── flake.lock         # Locked flake dependencies
-├── .envrc             # direnv configuration
+├── mise.toml          # Development tools, environment, and tasks
+├── scripts/           # Focused development verification scripts
 └── .gitignore         # Git ignore patterns
 ```
 
@@ -150,7 +149,7 @@ This is kinko - a Golang project with Nix flake development environment support.
 - `go` - Go compiler and toolchain
 - `gopls` - Go language server (LSP)
 - `gotools` - Additional Go development tools
-- `task` - Task runner (go-task)
+- `mise` - Tool and task runner
 
 ## Go Code Development
 
@@ -243,8 +242,8 @@ When implementing from a plan:
 5. When all tasks complete, move plan to `impl-plans/completed/`
 
 ## Task Management
-- Use `task` command for build automation
-- Define tasks in `Taskfile.yml` (to be created as needed)
+- Use `mise run` for build automation
+- Define tasks in `mise.toml`
 
 ## Git Workflow
 - Create meaningful commit messages
@@ -297,6 +296,6 @@ Example subtask format:
 ```
 
 ## Notes
-- This project uses Nix flakes for reproducible development environments
-- Use direnv for automatic environment activation
-- All development dependencies are managed through flake.nix
+- This project uses mise for reproducible development environments
+- Use `mise activate` for automatic tool and environment activation
+- All development dependencies and tasks are managed through `mise.toml`

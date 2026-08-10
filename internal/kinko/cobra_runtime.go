@@ -149,6 +149,7 @@ func newRuntimeRootCommand(ctx *runtimeContext) (*cobra.Command, error) {
 		newProfileCommand(ctx, preflight),
 		newPathCommand(ctx, preflight),
 		newDirenvCommand(ctx, preflight, func() bool { return root.PersistentFlags().Changed("path") }),
+		newHookCommand(ctx, preflight),
 		newPasswordCommand(ctx, preflight),
 		newDoctorCommand(ctx, finalizeOnlyPreflight),
 		newMigrationCommand(ctx, finalizeOnlyPreflight),

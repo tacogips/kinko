@@ -7,7 +7,7 @@ user-invocable: true
 
 # Release Workflow Skill (Go)
 
-This skill standardizes release execution for `kinko` using the repository `Taskfile.yml` and version source `internal/build/VERSION`.
+This skill standardizes release execution for `kinko` using the repository `mise.toml` and version source `internal/build/VERSION`.
 
 ## When to Apply
 
@@ -34,7 +34,7 @@ If the user explicitly asks for "binary only", perform steps 1-2 only.
 1. Ensure branch is clean and up to date.
 2. Ensure `internal/build/VERSION` is the intended release version.
 3. Ensure Go toolchain is available (`go version`).
-4. Ensure task runner is available (`task --version`) when using task-based commands.
+4. Ensure mise is available and the project configuration is trusted (`mise --version`, `mise trust`).
 5. Ensure GitHub CLI auth is valid for remote publishing:
    - `gh auth status`
 6. Ensure remote is configured and writable:
@@ -54,9 +54,9 @@ VERSION="$(cat internal/build/VERSION)"
 ARTIFACT_DIR="dist/release"
 mkdir -p "${ARTIFACT_DIR}"
 
-task clean
-task build
-task smoke
+mise run clean
+mise run build
+mise run smoke
 
 for target in \
   "linux amd64 tar.gz" \
@@ -78,7 +78,7 @@ do
   BIN="kinko_${VERSION}_${GOOS}_${GOARCH}${EXT}"
   OUT_BASE="kinko_${VERSION}_${GOOS}_${GOARCH}"
   GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
-    go build -ldflags "-s -w -X githus.com/tacogips/kinko/internal/build.version=${VERSION}" \
+    go build -ldflags "-s -w -X github.com/tacogips/kinko/internal/build.version=${VERSION}" \
     -o "${ARTIFACT_DIR}/${BIN}" ./cmd/kinko
 
   if [ "$PKG" = "zip" ]; then
@@ -220,9 +220,9 @@ After release commands finish:
 
 ## Failure Handling
 
-1. If `task build` fails, run `go build ./...` to isolate compile errors.
-2. If `task smoke` fails, stop and report failing test/build command output.
-3. If version mismatch appears in `kinko version`, verify `LDFLAGS` wiring in `Taskfile.yml`.
+1. If `mise run build` fails, run `mise exec -- go build ./...` to isolate compile errors.
+2. If `mise run smoke` fails, stop and report failing test/build command output.
+3. If version mismatch appears in `kinko version`, verify linker flag wiring in `mise.toml`.
 4. If `gh release create` fails due to existing tag/release, use:
    - `gh release upload <tag> <files...> --clobber`
 5. If checksum validation or archive coverage fails, rebuild artifacts as needed and regenerate `SHA256SUMS` for every retained `dist/release/kinko_*` archive.

@@ -25,10 +25,18 @@ const (
 	cmdPath      = "path"
 	cmdPassword  = "password"
 	cmdDirenv    = "direnv"
+	cmdHook      = "hook"
 	cmdDoctor    = "doctor"
 	cmdMigration = "migration"
 	cmdSync      = "sync"
 )
+
+const (
+	hookEnter = "enter"
+	hookLeave = "leave"
+)
+
+const envKinkoHookKeys = "KINKO_HOOK_KEYS"
 
 const (
 	cmdSyncPush = "push"

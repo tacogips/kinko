@@ -18,7 +18,7 @@
 # Dependencies
 /vendor/
 
-## nix/git
+## local environment and git
 .pre-commit-config.yaml
 **/.direnv
 **/.env
