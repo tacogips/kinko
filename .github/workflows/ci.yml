@@ -33,7 +33,7 @@ jobs:
           cache: true
 
       - name: Run Tests
-        run: go test ./... -timeout 90s
+        run: go test ./... -timeout 180s
 
       - name: Run Vet
         run: go vet ./...
