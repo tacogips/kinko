@@ -1,0 +1,476 @@
+min_version = "2026.8.3"
+
+[[hooks.enter]]
+shell = "bash"
+script = '''
+if command -v kinko >/dev/null 2>&1 && kinko hook --help >/dev/null 2>&1; then
+  eval "$(kinko --path "$MISE_PROJECT_ROOT" hook enter bash)"
+fi
+'''
+
+[[hooks.leave]]
+shell = "bash"
+script = '''
+if command -v kinko >/dev/null 2>&1 && kinko hook --help >/dev/null 2>&1; then
+  eval "$(kinko hook leave bash)"
+fi
+'''
+
+[tools]
+go = "latest"
+golangci-lint = "latest"
+ripgrep = "latest"
+shellcheck = "latest"
+"go:golang.org/x/tools/gopls" = "latest"
+"go:golang.org/x/tools/cmd/goimports" = "latest"
+
+[tasks."default"]
+description = "Show available tasks"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+mise tasks ls
+'''
+
+[tasks."build"]
+description = "Build the binary"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go build -ldflags "-s -w -X githus.com/tacogips/kinko/internal/build.version=${APP_VERSION}" -o kinko ./cmd/kinko
+'''
+
+[tasks."run"]
+description = "Run kinko (no args)"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go run ./cmd/kinko
+'''
+
+[tasks."run-args"]
+description = "Run kinko with explicit command args (example: mise run run-args -- 'status')"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go run ./cmd/kinko "$@"
+'''
+
+[tasks."init"]
+description = "Initialize kinko vault/config (interactive)"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go run ./cmd/kinko init
+'''
+
+[tasks."dev-run"]
+description = "Run kinko (no args) with isolated dev paths"
+depends = ["dev-prepare"]
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go run ./cmd/kinko --kinko-dir ${DEV_ROOT}/data --config ${DEV_ROOT}/config/bootstrap.toml
+'''
+
+[tasks."dev-run-args"]
+description = "Run kinko with explicit args using isolated dev paths (example: mise run dev-run-args -- 'status')"
+depends = ["dev-prepare"]
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go run ./cmd/kinko --kinko-dir ${DEV_ROOT}/data --config ${DEV_ROOT}/config/bootstrap.toml "$@"
+'''
+
+[tasks."dev-init"]
+description = "Initialize kinko interactively with isolated dev paths"
+depends = ["dev-prepare"]
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go run ./cmd/kinko --kinko-dir ${DEV_ROOT}/data --config ${DEV_ROOT}/config/bootstrap.toml init
+'''
+
+[tasks."dev-clean"]
+description = "Remove isolated dev data/config paths"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+rm -rf ${DEV_ROOT}
+'''
+
+[tasks."dev-prepare"]
+description = "Create isolated dev directories"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+mkdir -p ${DEV_ROOT}/data ${DEV_ROOT}/config
+'''
+
+[tasks."dev-info"]
+description = "Show isolated dev path configuration"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+echo "DEV_ROOT=${DEV_ROOT}"
+echo "DEV_KINKO_DIR=${DEV_ROOT}/data"
+echo "DEV_CONFIG_PATH=${DEV_ROOT}/config/bootstrap.toml"
+'''
+
+[tasks."dev-version"]
+description = "Run `kinko version` on isolated dev paths"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=version mise run dev-run-args
+'''
+
+[tasks."dev-status"]
+description = "Run `kinko status` on isolated dev paths"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=status mise run dev-run-args
+'''
+
+[tasks."dev-unlock"]
+description = "Run `kinko unlock` on isolated dev paths (interactive)"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=unlock mise run dev-run-args
+'''
+
+[tasks."dev-lock"]
+description = "Run `kinko lock` on isolated dev paths"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=lock mise run dev-run-args
+'''
+
+[tasks."dev-set"]
+description = "Run `kinko set` on isolated dev paths (example: mise run dev-set -- 'A=1 B=2')"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=set\ \"\$@\" mise run dev-run-args
+'''
+
+[tasks."dev-set-key"]
+description = "Run `kinko set-key` on isolated dev paths (example: mise run dev-set-key -- 'KEY --value value')"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=set-key\ \"\$@\" mise run dev-run-args
+'''
+
+[tasks."dev-get"]
+description = "Run `kinko get --reveal` on isolated dev paths (example: mise run dev-get -- 'KEY')"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=--force\ --confirm\=false\ get\ --reveal\ \"\$@\" mise run dev-run-args
+'''
+
+[tasks."dev-show"]
+description = "Run `kinko show --reveal` on isolated dev paths"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=--force\ --confirm\=false\ show\ --reveal mise run dev-run-args
+'''
+
+[tasks."dev-delete"]
+description = "Run `kinko delete` on isolated dev paths (example: mise run dev-delete -- 'KEY --yes')"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=delete\ \"\$@\" mise run dev-run-args
+'''
+
+[tasks."dev-delete-all"]
+description = "Run `kinko delete --all --yes` on isolated dev paths"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=delete\ --all\ --yes mise run dev-run-args
+'''
+
+[tasks."dev-explosion"]
+description = "Run `kinko explosion` on isolated dev paths (double confirmation)"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=explosion mise run dev-run-args
+'''
+
+[tasks."dev-export"]
+description = "Run `kinko export` on isolated dev paths (default shell: posix; example: mise run dev-export -- 'fish')"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=\{\"sh\"\=\>\"SHELL_NAME\=\\\"\"\$@\"\\\"\\nif\ \[\ -z\ \\\"\$SHELL_NAME\\\"\ \]\;\ then\\n\ \ SHELL_NAME\=\\\"posix\\\"\\nfi\\nprintf\ \\\"--force\ --confirm\=false\ export\ \%s\\\"\ \\\"\$SHELL_NAME\\\"\\n\"\} mise run dev-run-args
+'''
+
+[tasks."dev-exec"]
+description = "Run `kinko exec` on isolated dev paths (example: mise run dev-exec -- '-- env')"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=exec\ \"\$@\" mise run dev-run-args
+'''
+
+[tasks."dev-config-show"]
+description = "Run `kinko config show` on isolated dev paths"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=config\ show mise run dev-run-args
+'''
+
+[tasks."dev-config-set"]
+description = "Run `kinko config set` on isolated dev paths (example: mise run dev-config-set -- 'unlock_timeout 10m')"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+CLI_ARGS=config\ set\ \"\$@\" mise run dev-run-args
+'''
+
+[tasks."dev-e2e"]
+description = "Run automated end-to-end checks on isolated dev paths (auto-generates password if unset)"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+set -euo pipefail
+if [ -z "${KINKO_DEV_E2E_PASSWORD:-}" ]; then
+  if command -v openssl >/dev/null 2>&1; then
+    KINKO_DEV_E2E_PASSWORD="$(openssl rand -hex 16)"
+  else
+    KINKO_DEV_E2E_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '\n' | tr '/+' 'ab')"
+  fi
+fi
+
+# per-run isolated state
+E2E_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/kinko-dev-e2e.XXXXXX")"
+trap 'rm -rf "$E2E_ROOT"' EXIT
+E2E_KINKO_DIR="$E2E_ROOT/data"
+E2E_CONFIG_DIR="$E2E_ROOT/config"
+E2E_CONFIG_PATH="$E2E_CONFIG_DIR/bootstrap.toml"
+E2E_LOG_DIR="$E2E_ROOT/logs"
+mkdir -p "$E2E_KINKO_DIR" "$E2E_CONFIG_DIR"
+mkdir -p "$E2E_LOG_DIR"
+
+# 1) no-arg invocation shows help
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" 2>&1 | rg '^Usage:'
+
+# 2) init with password confirmation
+printf "%s\n%s\n" "$KINKO_DEV_E2E_PASSWORD" "$KINKO_DEV_E2E_PASSWORD" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false init >"$E2E_LOG_DIR/init.out" 2>/dev/null
+rg 'initialized' "$E2E_LOG_DIR/init.out"
+
+# 3) re-init must fail
+if printf "%s\n%s\n" "$KINKO_DEV_E2E_PASSWORD" "$KINKO_DEV_E2E_PASSWORD" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false init >"$E2E_LOG_DIR/reinit.out" 2>"$E2E_LOG_DIR/reinit.err"; then
+  echo "re-init unexpectedly succeeded"
+  exit 1
+fi
+rg 'already initialized' "$E2E_LOG_DIR/reinit.err"
+
+# 4) unlock failure boundary: 3 wrong attempts must fail and stay locked
+WRONG_PASS="${KINKO_DEV_E2E_WRONG_PASSWORD:-__wrong_password__}"
+if printf "%s\n%s\n%s\n" "$WRONG_PASS" "$WRONG_PASS" "$WRONG_PASS" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" unlock --timeout 5m >"$E2E_LOG_DIR/unlock-wrong.out" 2>"$E2E_LOG_DIR/unlock-wrong.err"; then
+  echo "unlock unexpectedly succeeded with wrong password"
+  exit 1
+fi
+rg 'unlock failed after 3 attempts' "$E2E_LOG_DIR/unlock-wrong.err"
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" status | rg '^locked$'
+
+# 5) unlock success path
+printf "%s\n" "$KINKO_DEV_E2E_PASSWORD" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" unlock --timeout 5m >"$E2E_LOG_DIR/unlock-ok.out" 2>"$E2E_LOG_DIR/unlock-ok.err"
+rg 'unlocked' "$E2E_LOG_DIR/unlock-ok.out"
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" status | rg '^unlocked'
+
+# 6) set/get/show basics
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" set-key FOO --value bar
+MASKED="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" get FOO)"
+test "$MASKED" != "bar"
+REVEAL="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false get --reveal FOO)"
+test "$REVEAL" = "bar"
+WEIRD_VALUE="a'b \$() \`tick\`"
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" set-key WEIRD --value "$WEIRD_VALUE"
+WEIRD_ASSIGN="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false export bash | rg '^export WEIRD=')"
+EXPECTED="$WEIRD_VALUE" ASSIGN="$WEIRD_ASSIGN" bash -c 'eval "$ASSIGN"; test "$WEIRD" = "$EXPECTED"'
+
+# 7) bulk delete scope
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" set-key BAR --value baz
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" delete --all --yes
+SHOW_OUT="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" show)"
+test -z "$SHOW_OUT"
+
+# 8) sensitive output deny path: non-tty redirection without --force must fail
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" set-key FOO --value bar
+if go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" get --reveal FOO >"$E2E_LOG_DIR/reveal-denied.out" 2>"$E2E_LOG_DIR/reveal-denied.err"; then
+  echo "reveal unexpectedly succeeded without --force on redirected output"
+  exit 1
+fi
+rg 'sensitive output blocked for non-tty/redirection' "$E2E_LOG_DIR/reveal-denied.err"
+if go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" export bash >"$E2E_LOG_DIR/export-denied.out" 2>"$E2E_LOG_DIR/export-denied.err"; then
+  echo "export unexpectedly succeeded without --force on redirected output"
+  exit 1
+fi
+rg 'sensitive output blocked for non-tty/redirection' "$E2E_LOG_DIR/export-denied.err"
+
+# 9) export/exec success checks
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false export bash | rg '^export FOO='
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" exec --all -- env | rg '^FOO=bar$'
+
+# 10) shared/repo export->import round-trip with default import behavior
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" set --shared SHARED_ONLY=shared DUP=shared
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" set DUP=repo REPO_ONLY=repo
+ROUNDTRIP_EXPORT="$(
+  go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false export bash
+)"
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" delete --all --yes
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" delete --shared --all --yes
+SHOW_OUT="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" show)"
+test -z "$SHOW_OUT"
+printf "%s\n" "$ROUNDTRIP_EXPORT" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" import bash --yes
+DUP_RESOLVED="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false get --reveal DUP)"
+test "$DUP_RESOLVED" = "repo"
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" delete --yes DUP
+DUP_FALLBACK="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false get --reveal DUP)"
+test "$DUP_FALLBACK" = "shared"
+SHARED_ONLY_VAL="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false get --reveal SHARED_ONLY)"
+test "$SHARED_ONLY_VAL" = "shared"
+REPO_ONLY_VAL="$(go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false get --reveal REPO_ONLY)"
+test "$REPO_ONLY_VAL" = "repo"
+
+# 11) lock + enforcement checks
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" lock
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" status | rg '^locked$'
+for CMD in "get FOO" "show" "set-key FOO --value x" "delete --all --yes" "exec --all -- env"; do
+  if go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" $CMD >"$E2E_LOG_DIR/locked-$CMD.out" 2>"$E2E_LOG_DIR/locked-$CMD.err"; then
+    echo "locked-state command unexpectedly succeeded: $CMD"
+    exit 1
+  fi
+  rg '^locked$' "$E2E_LOG_DIR/locked-$CMD.err"
+done
+if go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false export bash >"$E2E_LOG_DIR/locked-export.out" 2>"$E2E_LOG_DIR/locked-export.err"; then
+  echo "locked-state export unexpectedly succeeded"
+  exit 1
+fi
+rg '^locked$' "$E2E_LOG_DIR/locked-export.err"
+
+# 12) timeout expiry should auto-lock
+printf "%s\n" "$KINKO_DEV_E2E_PASSWORD" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" unlock --timeout 1s >"$E2E_LOG_DIR/unlock-short.out" 2>"$E2E_LOG_DIR/unlock-short.err"
+sleep 2
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" status | rg '^locked$'
+
+# 13) unlock for explosion negative and positive scenarios
+printf "%s\n" "$KINKO_DEV_E2E_PASSWORD" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" unlock --timeout 5m >"$E2E_LOG_DIR/unlock-exp.out" 2>"$E2E_LOG_DIR/unlock-exp.err"
+if printf "%s\ny\nBADTOKEN\n" "$WRONG_PASS" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" explosion >"$E2E_LOG_DIR/explosion-wrong-pass.out" 2>"$E2E_LOG_DIR/explosion-wrong-pass.err"; then
+  echo "explosion unexpectedly succeeded with wrong password"
+  exit 1
+fi
+rg 'password verification failed' "$E2E_LOG_DIR/explosion-wrong-pass.err"
+test -f "$E2E_KINKO_DIR/vault/meta.v1.json"
+
+printf "%s\nn\n" "$KINKO_DEV_E2E_PASSWORD" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" explosion >"$E2E_LOG_DIR/explosion-cancel-1.out" 2>"$E2E_LOG_DIR/explosion-cancel-1.err"
+rg '^aborted$' "$E2E_LOG_DIR/explosion-cancel-1.out"
+test -f "$E2E_KINKO_DIR/vault/meta.v1.json"
+
+printf "%s\ny\nWRONGTOKEN\n" "$KINKO_DEV_E2E_PASSWORD" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" explosion >"$E2E_LOG_DIR/explosion-cancel-2.out" 2>"$E2E_LOG_DIR/explosion-cancel-2.err"
+rg '^aborted$' "$E2E_LOG_DIR/explosion-cancel-2.out"
+test -f "$E2E_KINKO_DIR/vault/meta.v1.json"
+
+EXPLOSION_TOKEN="$(printf 'kinko.explosion.v1:%s' "$E2E_KINKO_DIR" | sha256sum | cut -c1-12 | tr '[:lower:]' '[:upper:]')"
+printf "%s\ny\n%s\n" "$KINKO_DEV_E2E_PASSWORD" "$EXPLOSION_TOKEN" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" explosion >"$E2E_LOG_DIR/explosion-ok.out" 2>"$E2E_LOG_DIR/explosion-ok.err"
+rg 'explosion completed' "$E2E_LOG_DIR/explosion-ok.out"
+
+# 14) post-reset no-arg invocation shows help
+go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" 2>&1 | rg '^Usage:'
+
+# 15) bootstrap tamper should be blocked
+printf "%s\n%s\n" "$KINKO_DEV_E2E_PASSWORD" "$KINKO_DEV_E2E_PASSWORD" | go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" --force --confirm=false init >"$E2E_LOG_DIR/init2.out" 2>/dev/null
+cp "$E2E_CONFIG_PATH" "$E2E_LOG_DIR/bootstrap.bak"
+printf "api_key=\"forbidden\"\n" >> "$E2E_CONFIG_PATH"
+if go run ./cmd/kinko --kinko-dir "$E2E_KINKO_DIR" --config "$E2E_CONFIG_PATH" status >"$E2E_LOG_DIR/bootstrap-status.out" 2>"$E2E_LOG_DIR/bootstrap-status.err"; then
+  echo "status unexpectedly succeeded with tampered bootstrap config"
+  exit 1
+fi
+rg 'bootstrap config contains sensitive-looking key' "$E2E_LOG_DIR/bootstrap-status.err"
+mv "$E2E_LOG_DIR/bootstrap.bak" "$E2E_CONFIG_PATH"
+
+echo "dev-e2e passed"
+
+'''
+
+[tasks."smoke"]
+description = "Run local smoke checks for kinko behavior"
+depends = ["build"]
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+set -euo pipefail
+./kinko version | rg '^[0-9]+\.[0-9]+\.[0-9]+$|^dev$'
+go test ./...
+go build ./...
+
+'''
+
+[tasks."test"]
+description = "Run tests"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go test -v ./...
+'''
+
+[tasks."test-coverage"]
+description = "Run tests with coverage"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
+'''
+
+[tasks."lint"]
+description = "Run linter"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+golangci-lint run ./...
+'''
+
+[tasks."fmt"]
+description = "Format code"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go fmt ./...
+'''
+
+[tasks."vet"]
+description = "Run go vet"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go vet ./...
+'''
+
+[tasks."clean"]
+description = "Clean build artifacts"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+rm -f kinko
+rm -f coverage.out coverage.html
+'''
+
+[tasks."tidy"]
+description = "Tidy go modules"
+run = '''
+DEV_ROOT=$(echo "${KINKO_DEV_ROOT:-${TMPDIR:-/tmp}/kinko-dev}")
+APP_VERSION=$(cat internal/build/VERSION)
+go mod tidy
+'''
