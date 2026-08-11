@@ -1,5 +1,5 @@
 ---
-description: "Bump version in flake.nix and related files (arg: major/minor/patch, default=patch)"
+description: "Bump the project version (arg: major/minor/patch, default=patch)"
 ---
 
 Bump the application version.
@@ -27,12 +27,8 @@ Bump the application version.
 
 ## Notes
 
-The version is stored in `internal/build/VERSION` and read by `flake.nix` using:
-```nix
-version = builtins.replaceStrings [ "\n" ] [ "" ] (builtins.readFile ./internal/build/VERSION);
-```
-
-This approach provides a single source of truth for version management across the project.
+The version is stored in `internal/build/VERSION`, which is the project's single
+source of truth for version management.
 
 ## Example Usage
 

@@ -63,7 +63,7 @@ Please invoke this subagent again with the required file path.
 **CRITICAL**: Before reviewing any Go code, you MUST read the Go coding guidelines file to ensure you apply correct standards.
 
 Use Read tool with:
-- `file_path`: `.claude/agents/go-coding-guideline.md`
+- `file_path`: `.agents/agents/go-coding-guideline.md`
 
 This guideline document contains:
 - Standard Go Project Layout
@@ -79,7 +79,7 @@ This guideline document contains:
 
 ## Execution Workflow
 
-1. **Read Go Guidelines**: Use Read tool to read `.claude/agents/go-coding-guideline.md` (MANDATORY - do not skip)
+1. **Read Go Guidelines**: Use Read tool to read `.agents/agents/go-coding-guideline.md` (MANDATORY - do not skip)
 2. **Read the File**: Use Read tool to load the specified Go file
 3. **Analyze Code**: Apply all review criteria from the checklist below AND the guidelines
 4. **Identify Issues**: Document each finding with severity and location

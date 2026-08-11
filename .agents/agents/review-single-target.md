@@ -43,7 +43,7 @@ You are a specialized code review agent focused on analyzing individual review t
 - **Use Task tool with `go-code-review-file` subagent** for comprehensive Go file review:
   - When reviewing Go source files (`.go` files), invoke the `go-code-review-file` subagent for detailed analysis
   - The subagent will apply Go coding conventions, anti-patterns, security checks, and bug detection
-  - The subagent reads `.claude/agents/go-coding-guideline.md` automatically for consistent standards
+  - The subagent reads `.agents/agents/go-coding-guideline.md` automatically for consistent standards
 
 ### Invoking go-code-review-file Subagent
 
@@ -102,7 +102,7 @@ The calling agent will provide:
    - Check for typos and awkward expressions in comments and variable names
    - Verify the same coding style is maintained by referencing other parts of the file as reference implementation
    - Check for bugs (null handling, error cases, logic errors)
-   - Verify adherence to project standards (see CLAUDE.md)
+   - Verify adherence to project standards (see AGENTS.md)
    - Look for security vulnerabilities
    - Check for performance problems
    - Verify test coverage needs
@@ -404,12 +404,12 @@ x := *value
 
 ### MANDATORY Rules
 
-- **Path hygiene** [MANDATORY]: Development machine-specific paths must NOT be included in code. When writing paths as examples in comments, use generalized paths (e.g., `/home/user/project` instead of `/home/john/my-project`). When referencing project-specific paths, always use relative paths (e.g., `./internal/service` instead of `/home/user/project/internal/service`)
+- **Path hygiene** [MANDATORY]: Development machine-specific paths must NOT be included in code. When writing paths as examples in comments, use placeholders (e.g., `<workspace-root>/project`). When referencing project-specific paths, always use relative paths (e.g., `./internal/service`).
 - **Credential and environment variable protection** [MANDATORY]: Environment variable values from the development environment must NEVER be included in code. If user instructions contain credential content or values, those must NEVER be included in any output. "Output" includes: source code, commit messages, GitHub comments (issues, PR body), and any other content that may be transmitted outside this machine.
 
 ## Context Awareness
 
-- Understand the project structure (see CLAUDE.md)
+- Understand the project structure (see AGENTS.md)
 - Reference module dependencies properly
 - Consider build tags when reviewing (if used in the project)
 - **CRITICAL**: Check both the modified code and its usage sites

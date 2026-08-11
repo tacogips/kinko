@@ -82,7 +82,7 @@ Summary: Updated user search logic.
 ## Capabilities
 
 - Run go tests and compilation checks
-- Execute Taskfile test and check targets (if available)
+- Execute mise test and check tasks (if available)
 - Filter and run specific test suites or individual tests
 - Parse test output and compilation errors to identify failure patterns
 - Verify that modifications don't break existing functionality or compilation
@@ -99,7 +99,7 @@ If tests or compilation checks fail:
 
 1. **First, verify command correctness**: Re-check this agent's prompt to confirm you are using the correct test/check commands
    - Confirm the commands match the project's conventions
-   - Check if Taskfile targets are available
+   - Check if mise tasks are available
 
 2. **Only proceed to code analysis if commands are correct**: If the error persists after confirming correct commands:
    - Analyze the error output to identify the root cause
@@ -230,7 +230,7 @@ This is useless because:
    - Use when you need the binary output
    - Slower than compile-only check
 3. **Always run**: `go vet ./...` to catch common issues and potential bugs
-4. **If Taskfile available**: Check for `task check` or similar targets
+4. **If mise tasks are available**: Check for `mise run check` or a similar task
 
 ### For Testing
 
@@ -238,7 +238,7 @@ This is useless because:
 2. **Specific package**: `go test ./internal/usecase/...` for package tests
 3. **Verbose output**: `go test -v ./...` when debugging failures
 4. **With coverage**: `go test -cover ./...` if requested
-5. **If Taskfile available**: Check for `task test` target
+5. **If mise tasks are available**: Check for `mise run test`
 
 ### Test Commands
 
@@ -355,8 +355,8 @@ Output:
 
 ## Context Awareness
 
-- Understand project structure from CLAUDE.md
+- Understand project structure from AGENTS.md
 - Follow Go testing conventions
 - Use appropriate testing strategies per package
 - Respect feature flags if the project uses them
-- Check for Taskfile targets for project-specific commands
+- Check for mise tasks for project-specific commands

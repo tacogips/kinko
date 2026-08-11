@@ -174,7 +174,7 @@ For each error in priority order:
    - Read error message details from GitHub Actions logs
 
 4. **Apply the fix** using Edit tool:
-   - Follow Go best practices and CLAUDE.md guidelines
+   - Follow Go best practices and AGENTS.md guidelines
    - Handle errors properly
    - Ensure proper formatting
 

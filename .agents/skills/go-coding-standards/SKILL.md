@@ -23,6 +23,12 @@ Apply these standards when:
 3. **Explicit Over Implicit** - Make behavior obvious, avoid magic
 4. **Fail Fast** - Return errors early, handle them explicitly
 
+## Source File Size
+
+- **Hard limit**: No Go source file (`*.go`, including `*_test.go`) should stay above **1000 lines**. If a file is at or past that size, **split it** in the same change set or as a focused follow-up.
+- **How to split**: Prefer cohesive package-internal boundaries such as command handlers, adapters, domain services, helpers, fixtures, or focused test files. If external callers depend on an API, preserve the public package surface with small wrapper functions, type aliases, or moved code inside the same package.
+- **Agents**: When editing or reviewing code, if a touched file is **1000+ lines**, treat splitting as **in scope** for the task unless the user explicitly excludes it.
+
 ## Quick Reference
 
 ### Must-Use Patterns

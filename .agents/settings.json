@@ -3,7 +3,7 @@
     "local": {
       "source": {
         "source": "directory",
-        "path": ".claude/marketplace"
+        "path": ".agents/marketplace"
       }
     }
   },
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "goimports -w ."
+            "command": "mise exec -- goimports -w ."
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "goimports -w ."
+            "command": "mise exec -- goimports -w ."
           }
         ]
       }

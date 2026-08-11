@@ -1,0 +1,3 @@
+interface:
+  display_name: "supply-chain-secure-publish"
+  short_description: "Use when publishing Go modules or managing module repositories. Provides supply chain attack countermeasures including version tagging security, repository access control, and CI/CD publishing pipelines. Adapted from Shai-Hulud npm attack lessons."
