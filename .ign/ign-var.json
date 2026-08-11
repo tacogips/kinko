@@ -1,10 +1,14 @@
 {
   "variables": {
-    "DESCRIPTION": "A Golang project",
+    "DESCRIPTION": "Local encrypted environment-variable manager",
+    "GITHUB_REPOSITORY": "tacogips/kinko",
     "GO_VERSION": "1.25.4",
-    "HOMEPAGE": "https://github.com/user/repo",
-    "MODULE_PATH": "githus.com/tacogips/kinko",
+    "HOMEBREW_FORMULA_CLASS": "Kinko",
+    "HOMEBREW_TAP": "tacogips/tap",
+    "HOMEPAGE": "https://github.com/tacogips/kinko",
+    "LICENSE": "MIT",
+    "MODULE_PATH": "github.com/tacogips/kinko",
     "PROJECT_NAME": "kinko",
-    "VERSION": "0.1.0"
+    "VERSION": "0.1.10"
   }
 }

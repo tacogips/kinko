@@ -38,11 +38,11 @@ Apply these guidelines when:
 
 ```go
 // BAD
-const apiKey = "ghp_xxxxxxxxxxxxxxxxxxxx"
+const apiKey = "example-hardcoded-token"
 
 // BAD - embedded in struct
 var config = Config{
-    Token: "sk-xxxxxxxxxxxxxxxxxxxx",
+    Token: "example-hardcoded-token",
 }
 
 // GOOD - environment variable
