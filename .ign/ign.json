@@ -6,10 +6,10 @@
   },
   "hash": "5e7d9f90125b7ebaca4f4a1cede375631eedf07337f30d1bfda58faf3ec2413d",
   "metadata": {
-    "generated_at": "2026-08-11T17:58:59.767202+09:00",
+    "generated_at": "2026-08-12T02:32:49.459067+09:00",
     "generated_by": "ign update",
     "template_name": "go-v1",
     "template_version": "1.0.0",
-    "ign_version": "0.1.21"
+    "ign_version": "0.1.25"
   }
 }
