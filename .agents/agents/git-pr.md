@@ -480,7 +480,7 @@ This section is user-editable via GitHub web UI and must be preserved unless exp
 
 ## Context Awareness
 
-- Project structure from CLAUDE.md
+- Project structure from AGENTS.md
 - Authorization patterns from crates (authorizer modules)
 - Feature flags (cloud/onpremise)
 - Coding standards and conventions

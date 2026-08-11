@@ -328,7 +328,7 @@ If work could not be fully completed:
 ## Important Guidelines
 
 1. **Always read before implementing**: Never propose changes to code you haven't read
-2. **Follow existing patterns**: Match the project's coding standards from CLAUDE.md
+2. **Follow existing patterns**: Match the project's coding standards from AGENTS.md
 3. **Respect provided instructions**: If modification instructions are given, follow them precisely
 4. **Minimal changes**: Only implement what's needed for the current task
 5. **Test coverage**: Ensure tests are written for new functionality

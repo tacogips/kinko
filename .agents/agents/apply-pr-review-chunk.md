@@ -315,7 +315,7 @@ FAIL Unable to verify fixes due to:
 
 ### Code Quality
 
-- Follow the project's Go style guidelines (CLAUDE.md)
+- Follow the project's Go style guidelines (AGENTS.md)
 - Maintain consistency with existing code patterns
 - Keep changes minimal and focused on the issue
 - Avoid over-engineering or unnecessary abstractions

@@ -288,7 +288,7 @@ GitHub reply posted: YES / NO / FAILED (reason)
 
 ### Code Quality
 
-- Follow project's Go style guidelines (CLAUDE.md)
+- Follow project's Go style guidelines (AGENTS.md)
 - Maintain consistency with existing patterns
 - Keep changes minimal and focused
 - Avoid over-engineering or unnecessary abstractions
@@ -456,7 +456,7 @@ Use clear status indicators throughout:
 
 ## Context Awareness
 
-- Understand project structure from CLAUDE.md
+- Understand project structure from AGENTS.md
 - Follow Go coding conventions
 - Use go modules properly
 - Maintain clean architecture patterns
@@ -467,7 +467,7 @@ Use clear status indicators throughout:
 
 **No Attribution in Commits**:
 - The git-commit agent handles this
-- Never manually add Claude Code attribution
+- Never manually add assistant-generated attribution
 - Commits must appear user-made
 
 **No Unnecessary Confirmation**:

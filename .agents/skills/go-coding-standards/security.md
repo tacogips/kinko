@@ -15,8 +15,8 @@ The following content types are strictly prohibited in any output files:
 - Never include absolute filesystem paths from the host machine
 - Use relative paths from project root instead
 - Examples of prohibited patterns:
-  - `/home/username/...`
-  - `/Users/username/...`
+  - `<home-directory>/...`
+  - `<workspace-root>/...`
   - `C:\Users\username\...`
 
 ### 2. Credential Information
@@ -43,7 +43,7 @@ Never include any of the following:
 
 ```go
 // BAD - Exposes host path
-configPath := "/home/user/projects/myapp/config.yaml"
+configPath := "<machine-specific-project-path>/config.yaml"
 
 // GOOD - Uses relative path
 configPath := "./config.yaml"
@@ -55,7 +55,7 @@ configPath := filepath.Join(".", "config.yaml")
 
 ```markdown
 <!-- BAD -->
-Project located at: /home/developer/workspace/project
+Project located at: <machine-specific-workspace>/project
 
 <!-- GOOD -->
 Project located at: ./project (relative to workspace root)
@@ -65,7 +65,7 @@ Project located at: ./project (relative to workspace root)
 
 ```go
 // BAD - Hardcoded credential
-token := "ghp_xxxxxxxxxxxxxxxxxxxx"
+token := "example-hardcoded-token"
 
 // GOOD - Environment variable reference
 token := os.Getenv("GITHUB_TOKEN")
@@ -75,15 +75,13 @@ token := os.Getenv("GITHUB_TOKEN")
 
 ```yaml
 # BAD
-github_token: ghp_actualTokenValue123
+github_token: example-hardcoded-token
 ssh_key: |
-  -----BEGIN OPENSSH PRIVATE KEY-----
-  actual-key-content
-  -----END OPENSSH PRIVATE KEY-----
+  <embedded-private-key-content>
 
 # GOOD
 github_token: ${GITHUB_TOKEN}  # Set via environment variable
-ssh_key_path: ~/.ssh/id_ed25519  # Reference path, not content
+ssh_key_path: ${SSH_PRIVATE_KEY_PATH}  # Reference path, not content
 ```
 
 ## Verification Checklist

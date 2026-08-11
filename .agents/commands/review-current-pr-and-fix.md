@@ -41,7 +41,7 @@ Use the `review-current-pr-and-fix` agent to handle the complete workflow.
 7. Commit and push
 8. Create PR from review branch
 
-See `.claude/agents/review-current-pr-and-fix.md` for complete workflow details.
+See `.agents/agents/review-current-pr-and-fix.md` for complete workflow details.
 
 ## Workflow Modes
 
@@ -64,7 +64,7 @@ See `.claude/agents/review-current-pr-and-fix.md` for complete workflow details.
 - PR must exist for the current branch (or current review branch in continuation mode)
 - No uncommitted changes (normal mode only)
 - GitHub CLI (gh) must be authenticated
-- Required scripts and templates in `.claude/` directory
+- Required scripts and templates in `.agents/` directory
 
 ## Multi-Agent Architecture
 

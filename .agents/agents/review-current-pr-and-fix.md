@@ -44,7 +44,7 @@ Supports two modes:
 - Must have a PR for the current branch (or current review branch in continuation mode)
 - No uncommitted changes (normal mode only)
 - GitHub CLI (gh) authenticated
-- Required scripts and templates in .claude/ directory
+- Required scripts and templates in .agents/ directory
 
 ## Workflow Overview
 
@@ -68,7 +68,7 @@ Supports two modes:
 
 **Check if on review branch:**
 
-Use `.claude/scripts/check-review-branch.sh` to:
+Use `.agents/scripts/check-review-branch.sh` to:
 - Detect if current branch ends with `_review_{n}` pattern
 - Extract original branch name if in continuation mode
 - Set SKIP_BRANCH_PREP, CONTINUATION_MODE, REVIEW_BRANCH flags
@@ -131,7 +131,7 @@ Use `.claude/scripts/check-review-branch.sh` to:
    ```
    - If any changes: Exit with error
 
-2. **Find available review branch name** using `.claude/scripts/find-available-branch.sh`:
+2. **Find available review branch name** using `.agents/scripts/find-available-branch.sh`:
    - Checks both local and remote branches
    - Finds first available `{current_branch}_review_{n}` number
    - Store as REVIEW_BRANCH
@@ -412,7 +412,7 @@ Focus ONLY on guideline violations. Functional bugs are handled by review-single
    - **Low**: Style issues, documentation gaps, minor inconsistencies
      - Examples: Naming inconsistencies, missing comments, formatting issues
 
-2. **Generate review report** using template `.claude/templates/review-report-format.md`:
+2. **Generate review report** using template `.agents/templates/review-report-format.md`:
    - Populate with PR details, issue counts, categorized issues
    - Include review comments status (fixed/not fixed/partial)
    - Apply severity criteria consistently across all issues
@@ -469,7 +469,7 @@ Task:
 
 Remember:
 - Focus only on files within {module_path}/
-- Follow CLAUDE.md guidelines
+- Follow AGENTS.md guidelines
 - Run `gofmt` or `goimports` on modified files
 - Do not fix issues in other modules/packages
 - Stop if unrelated errors block progress
@@ -485,7 +485,7 @@ Remember:
 
 ### Step 8: Pre-Commit Verification and Commit Fixes
 
-1. **Re-check review branch availability** using `.claude/scripts/verify-and-rename-branch.sh`:
+1. **Re-check review branch availability** using `.agents/scripts/verify-and-rename-branch.sh`:
    - Handles case where another team member created same branch during review
    - Increments suffix number if collision detected
    - Creates new branch and checks it out
@@ -589,7 +589,7 @@ Remember:
    {review_comment_urls_list}
 
    Task:
-   Call the git-pr agent (.claude/agents/git-pr.md) with the following information:
+   Call the git-pr agent (.agents/agents/git-pr.md) with the following information:
    - Pass base branch as: {ORIGINAL_BRANCH}
    - Pass original PR URL in issue URLs list
    - Pass all review comment URLs in the description section
@@ -618,7 +618,7 @@ Remember:
    {additional_review_comment_urls_list}
 
    Task:
-   Call the git-pr agent (.claude/agents/git-pr.md) with:
+   Call the git-pr agent (.agents/agents/git-pr.md) with:
    - Original PR URL in issue URLs list
    - Additional review comment URLs in the description section
    - No state change (preserve current state)
@@ -657,8 +657,8 @@ Remember:
         - Out-of-scope compilation errors: Mark as incomplete with reason "Blocked by errors in {other_crate}"
         - Partial multi-point fixes: Mark as incomplete with reason "Addressed {X} of {Y} points"
 
-   b. **Post simple reply** using `.claude/scripts/post-response-comment.sh`:
-      - Uses template `.claude/templates/response-comment-format.md`
+   b. **Post simple reply** using `.agents/scripts/post-response-comment.sh`:
+      - Uses template `.agents/templates/response-comment-format.md`
       - Posts as reply to review comment thread
       - Only includes review PR URL (no fix details needed)
 
@@ -668,11 +668,11 @@ Remember:
    - Only post for **fully completed** fixes (all criteria met)
    - Post as REPLIES to review comments (inline code comments)
    - Post to **original PR**, not review fixes PR
-   - Use English for all content (per CLAUDE.md guidelines)
+   - Use English for all content (per AGENTS.md guidelines)
    - Do NOT gather fix details - only PR URL is needed
    - Let apply-pr-review-chunk agents handle all fix context
 
-7. **Display comprehensive result summary** using template `.claude/templates/review-summary.md`:
+7. **Display comprehensive result summary** using template `.agents/templates/review-summary.md`:
    - Populate all placeholders with actual data
    - Show: mode, branches, PR URLs, comment status, file changes, verification results, next actions
    - Make review fixes PR URL prominent at top
@@ -721,7 +721,7 @@ Remember:
 - **Extract comment URLs** from agent responses for fix delegation
 - **Check uncommitted changes** before starting (exit if any found)
 - **Use external templates/scripts** to keep command file concise
-- **Follow CLAUDE.md guidelines** for all fixes
+- **Follow AGENTS.md guidelines** for all fixes
 - **Run `gofmt`/`goimports`** on modified files before committing
 
 ### Review Comment URL Format
@@ -763,13 +763,13 @@ Remember:
 
 ## Templates and Scripts
 
-**Templates** (in `.claude/templates/`):
+**Templates** (in `.agents/templates/`):
 - `review-pr-body.md` - PR body format for review fixes PR
 - `review-summary.md` - Comprehensive result summary (end of workflow)
 - `response-comment-format.md` - Response comment format for original PR
 - `review-report-format.md` - Review report format (Step 5)
 
-**Scripts** (in `.claude/scripts/`):
+**Scripts** (in `.agents/scripts/`):
 - `check-review-branch.sh` - Check if on review branch, extract original branch
 - `find-available-branch.sh` - Find available review branch number
 - `verify-and-rename-branch.sh` - Pre-commit branch verification and rename
