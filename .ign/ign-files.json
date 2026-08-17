@@ -36,7 +36,6 @@
     ".agents/skills/supply-chain-secure-code/agents/openai.yaml",
     ".agents/skills/supply-chain-secure-install/agents/openai.yaml",
     ".agents/skills/supply-chain-secure-publish/agents/openai.yaml",
-    ".pre-commit-config.yaml",
     "packaging/homebrew/README.md",
     "scripts/build-homebrew-release.sh",
     "scripts/render-homebrew-formula.sh"

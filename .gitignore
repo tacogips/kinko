@@ -19,7 +19,6 @@
 /vendor/
 
 ## local environment and git
-.pre-commit-config.yaml
 **/.direnv
 **/.env
 **/.envrc.private*
