@@ -1,5 +1,6 @@
 {
   "files": [
+    ".pre-commit-config.yaml",
     ".agents/agents/analyze-file-change-in-pr.md",
     ".agents/agents/apply-pr-review-chunk.md",
     ".agents/agents/apply-specific-feedback.md",
