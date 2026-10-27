@@ -17,7 +17,7 @@ fi
 '''
 
 [tools]
-go = "latest"
+go = "1.27.3"
 golangci-lint = "latest"
 ripgrep = "latest"
 shellcheck = "latest"
