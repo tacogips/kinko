@@ -850,3 +850,9 @@ Note:
 - `kinko explosion` allows a safe root `folders/` directory, refuses registered mounted folders, and removes folder storage after confirmation.
 - `kinko move local-to-shared <key>` and `kinko move shared-to-local <key>` move exactly one key, require an unlocked session, preserve the encrypted vault format, and replace destination keys only with `--overwrite`; `--yes` skips only the move confirmation.
 - Interactive `kinko delete --all` and `kinko delete --shared --all` ask for destructive confirmation before password re-entry; declined confirmation prints `aborted` without asking for the password, while `--yes` still verifies the password before loading, listing, or mutation.
+
+## Go TLS security baseline
+
+Go modules in this repository require Go 1.27.3 or newer for the eMudhra intermediate-certificate
+mitigation (CVE-2026-111943). Rebuild existing binaries and container images to
+activate the updated `crypto/x509` verifier.
