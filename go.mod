@@ -1,8 +1,6 @@
 module github.com/tacogips/kinko
 
-go 1.26.0
-
-toolchain go1.26.5
+go 1.27.3
 
 require (
 	github.com/spf13/cobra v1.8.1
