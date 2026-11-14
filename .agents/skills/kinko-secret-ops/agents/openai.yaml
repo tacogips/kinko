@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kinko Secret Ops"
+  short_description: "Operate kinko secret workflows safely"
+  default_prompt: "Use $kinko-secret-ops to manage kinko secrets for my project safely."
