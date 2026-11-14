@@ -1,7 +1,9 @@
 package kinko
 
 import (
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,6 +58,7 @@ func main() {
  scenario := filepath.Base(os.Args[0])
  args := os.Args[1:]
  call()
+ if len(args) == 1 && args[0] == "--version" { fmt.Print("bws 2.0.0"); return }
  if len(args) < 6 || strings.Join(args[len(args)-4:], " ") != "--output json --color no" {
   fmt.Fprintln(os.Stderr, "required output/color argv missing")
   os.Exit(5)
@@ -286,4 +289,30 @@ func mustReadOptionalSyncTestFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// runLegacySyncEngineFixture preserves regression coverage of the historical
+// format-1 engine. It is deliberately separate from Run: the public CLI always
+// applies the V2 transport and endpoint preflight, covered by the default sync
+// security and Cobra tests.
+func runLegacySyncEngineFixture(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if len(args) < 6 || args[0] != "--kinko-dir" || args[2] != "--config" || args[4] != cmdSync {
+		return fmt.Errorf("unsupported legacy sync fixture arguments")
+	}
+	opts := globalOptions{dataDir: args[1], configPath: args[3]}
+	syncOpts := syncOptions{direction: syncDirection(args[5])}
+	flags := flag.NewFlagSet("legacy-sync-engine-fixture", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&syncOpts.provider, "provider", "", "")
+	flags.StringVar(&syncOpts.projectID, "project-id", "", "")
+	flags.BoolVar(&syncOpts.force, "force", false, "")
+	flags.BoolVar(&syncOpts.dryRun, "dry-run", false, "")
+	flags.BoolVar(&syncOpts.jsonOut, "json", false, "")
+	if err := flags.Parse(args[6:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected legacy sync fixture positional arguments")
+	}
+	return runSyncWithOptions(opts, syncOpts, stdin, stdout, stderr)
 }

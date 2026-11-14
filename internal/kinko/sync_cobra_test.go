@@ -104,45 +104,51 @@ func TestCobraSyncPushAcceptsCLILegacyWithArgvAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestCobraSyncDirectionDispatchesLegacyAndCompletionExactly(t *testing.T) {
-	originalLegacy, originalCompletion := runLegacySyncCommand, runCompletionSyncCommand
-	t.Cleanup(func() { runLegacySyncCommand, runCompletionSyncCommand = originalLegacy, originalCompletion })
-	legacyCalls, completionCalls := 0, 0
-	runLegacySyncCommand = func(globalOptions, syncOptions, io.Reader, io.Writer, io.Writer) error {
-		legacyCalls++
-		return nil
+func TestCobraSyncDirectionDefaultsUseSecureTransport(t *testing.T) {
+	original := runCompletionSyncCommand
+	t.Cleanup(func() { runCompletionSyncCommand = original })
+	for _, direction := range []syncDirection{syncDirectionPush, syncDirectionPull} {
+		t.Run(string(direction), func(t *testing.T) {
+			called := false
+			runCompletionSyncCommand = func(_ globalOptions, options syncDirectionV2Options, _ io.Reader, _, _ io.Writer) error {
+				called = true
+				if options.Direction != direction || options.Provider != supportedSyncProvider || options.Runtime.Transport != bwsTransportAuto || options.Runtime.AllowArgv {
+					t.Fatalf("unexpected default options: %+v", options)
+				}
+				return errBWSSecureMutationUnavailable
+			}
+			ctx := &runtimeContext{stdin: strings.NewReader(""), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+			command := newSyncDirectionCommand(ctx, func() error { return nil }, direction)
+			if err := command.Flags().Set("provider", "bws"); err != nil {
+				t.Fatal(err)
+			}
+			err := command.RunE(command, nil)
+			if !called || !errors.Is(err, errBWSSecureMutationUnavailable) {
+				t.Fatalf("default command bypassed secure transport: called=%v err=%v", called, err)
+			}
+		})
 	}
+}
+
+func TestCobraSyncDirectionPreservesExplicitSelectorOptions(t *testing.T) {
+	original := runCompletionSyncCommand
+	t.Cleanup(func() { runCompletionSyncCommand = original })
 	var captured syncDirectionV2Options
 	runCompletionSyncCommand = func(_ globalOptions, options syncDirectionV2Options, _ io.Reader, _, _ io.Writer) error {
-		completionCalls++
 		captured = options
 		return nil
 	}
-	newContext := func() *runtimeContext {
-		return &runtimeContext{stdin: strings.NewReader(""), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
-	}
-
-	legacy := newSyncDirectionCommand(newContext(), func() error { return nil }, syncDirectionPush)
-	if err := legacy.Flags().Set("provider", "bws"); err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.RunE(legacy, nil); err != nil {
-		t.Fatal(err)
-	}
-	if legacyCalls != 1 || completionCalls != 0 {
-		t.Fatalf("legacy=%d completion=%d", legacyCalls, completionCalls)
-	}
-
-	completion := newSyncDirectionCommand(newContext(), func() error { return nil }, syncDirectionPull)
+	ctx := &runtimeContext{stdin: strings.NewReader(""), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	command := newSyncDirectionCommand(ctx, func() error { return nil }, syncDirectionPull)
 	for name, value := range map[string]string{"provider": "bws", "select-key": "ONLY", "progress": "none", "bws-transport": "auto"} {
-		if err := completion.Flags().Set(name, value); err != nil {
+		if err := command.Flags().Set(name, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := completion.RunE(completion, nil); err != nil {
+	if err := command.RunE(command, nil); err != nil {
 		t.Fatal(err)
 	}
-	if legacyCalls != 1 || completionCalls != 1 || captured.Direction != syncDirectionPull || len(captured.Selector.IncludeKeys) != 1 || captured.Selector.IncludeKeys[0] != "ONLY" {
-		t.Fatalf("legacy=%d completion=%d captured=%+v", legacyCalls, completionCalls, captured)
+	if captured.Direction != syncDirectionPull || len(captured.Selector.IncludeKeys) != 1 || captured.Selector.IncludeKeys[0] != "ONLY" || captured.Runtime.Transport != bwsTransportAuto {
+		t.Fatalf("unexpected options: %+v", captured)
 	}
 }

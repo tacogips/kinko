@@ -61,17 +61,8 @@ func newSyncDirectionCommand(ctx *runtimeContext, preflight func() error, direct
 			if err := preflight(); err != nil {
 				return err
 			}
-			legacyOptions := syncOptions{
-				direction: direction,
-				provider:  provider,
-				force:     ctx.opts.force,
-				dryRun:    dryRun,
-				projectID: projectID,
-				jsonOut:   jsonOutput,
-			}
-			if !common.completionRequested(command) {
-				return runLegacySyncCommand(ctx.opts, legacyOptions, ctx.stdin, ctx.stdout, ctx.stderr)
-			}
+			// Every invocation uses the transport and endpoint security preflight,
+			// including commands that leave all optional flags at their defaults.
 			policy := syncConflictPolicy(common.onConflict)
 			if policy == "" {
 				policy = syncConflictFail
@@ -102,10 +93,7 @@ func newSyncDirectionCommand(ctx *runtimeContext, preflight func() error, direct
 	return command
 }
 
-var (
-	runLegacySyncCommand     = runSyncWithOptions
-	runCompletionSyncCommand = runSyncDirectionV2
-)
+var runCompletionSyncCommand = runSyncDirectionV2
 
 type syncCommonFlags struct {
 	includeProfiles, includePaths, includeKeys         []string
@@ -193,22 +181,6 @@ func (flags *syncCommonFlags) options() (syncSelector, []syncPathMap, error) {
 
 func (flags *syncCommonFlags) runtime(projectID string) syncMaintenanceRuntimeOptions {
 	return syncMaintenanceRuntimeOptions{Config: bwsConfigOptions{ConfigFile: flags.bwsConfigFile, Profile: flags.bwsProfile, ServerURL: flags.bwsServerURL, ProjectID: projectID}, Transport: bwsTransportMode(flags.transport), AllowArgv: flags.allowArgv}
-}
-
-func (flags *syncCommonFlags) completionRequested(command *cobra.Command) bool {
-	if command.Flags().Changed("yes") {
-		return true
-	}
-	for _, name := range []string{
-		"select-profile", "select-path", "select-key", "exclude-profile", "exclude-path", "exclude-key", "shared", "map-path",
-		"on-conflict", "resolve", "delete", "bws-config-file", "bws-profile", "bws-server-url", "bws-transport", "allow-secret-argv",
-		"max-retries", "retry-max-delay", "resume", "progress",
-	} {
-		if command.Flags().Changed(name) {
-			return true
-		}
-	}
-	return false
 }
 
 func newSyncBootstrapCommand(ctx *runtimeContext, preflight func() error) *cobra.Command {

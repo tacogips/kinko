@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -872,7 +873,7 @@ func writeExportBlock(w io.Writer, shell, scope, title string, secrets map[strin
 	}
 	if withScopeComments {
 		_, _ = fmt.Fprintf(w, "%s kinko:scope=%s\n", shellCommentPrefix(shell), scope)
-		_, _ = fmt.Fprintf(w, "%s %s\n", shellCommentPrefix(shell), title)
+		_, _ = fmt.Fprintf(w, "%s %s\n", shellCommentPrefix(shell), escapeShellComment(title))
 	}
 	for _, k := range sortedKeys(secrets) {
 		line, err := renderShellAssignment(shell, k, secrets[k])
@@ -882,6 +883,13 @@ func writeExportBlock(w io.Writer, shell, scope, title string, secrets map[strin
 		_, _ = fmt.Fprintln(w, line)
 	}
 	return nil
+}
+
+// escapeShellComment keeps metadata on one physical line, preventing shell
+// commands in newline-containing paths or profiles from escaping the comment.
+func escapeShellComment(text string) string {
+	quoted := strconv.Quote(text)
+	return quoted[1 : len(quoted)-1]
 }
 
 func shellCommentPrefix(shell string) string {

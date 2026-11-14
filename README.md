@@ -662,6 +662,13 @@ kinko --profile default --path . exec --env API_KEY,DB_URL -- env | rg API_KEY
 
 `exec` is the safer default compared with exporting into the parent shell.
 
+`kinko get KEY` (including `--reveal`) returns exit status `1` when the key is
+not registered in the resolved scope or shared fallback, with no value on stdout.
+`kinko exec --env KEY -- ./run-some.sh` also returns status `1` if `KEY` is
+missing and does not start the script. Every key in a comma-separated `--env`
+selection must exist in kinko, even if it exists in the parent environment.
+Registered empty values are valid.
+
 ### Config (Encrypted)
 
 ```bash
@@ -856,3 +863,7 @@ Note:
 Go modules in this repository require Go 1.27.3 or newer for the eMudhra intermediate-certificate
 mitigation (CVE-2026-111943). Rebuild existing binaries and container images to
 activate the updated `crypto/x509` verifier.
+
+### Security review follow-up
+
+Default `sync push` and `sync pull` use the secured V2 runtime, including endpoint validation and state/path-mapping rules. Mutations require a value-safe provider or explicit `--bws-transport=cli-legacy --allow-secret-argv` acknowledgement. See [the security review](design-docs/specs/design-security-review-2026-11.md) for fixed findings and remaining improvements.

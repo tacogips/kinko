@@ -168,3 +168,7 @@ findings.
 Detailed findings: `design-docs/specs/design-review-findings-2026-07.md`
 
 ---
+
+## November 2026 security review
+
+See [findings, remediation, and remaining improvements](design-security-review-2026-11.md) for the repository-wide review and five verified fixes.

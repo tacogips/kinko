@@ -438,6 +438,9 @@ func decryptBlobWithResolverAndAAD(key []byte, blobJSON string, expectedAAD []by
 	if err != nil {
 		return nil, err
 	}
+	if len(nonce) != aead.NonceSize() {
+		return nil, errDecryptFailed
+	}
 	plain, err := aead.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
 		return nil, errDecryptFailed

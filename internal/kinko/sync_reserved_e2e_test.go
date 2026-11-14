@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestSyncRejectsDuplicateReservedRemoteNames(t *testing.T) {
+func TestLegacySyncEngineRejectsDuplicateReservedRemoteNames(t *testing.T) {
 	stub := buildStubBWS(t)
 	dataDir, configPath, _ := setupSyncE2EVault(t)
 	meta, err := loadMeta(dataDir)
@@ -55,7 +55,7 @@ func TestSyncRejectsDuplicateReservedRemoteNames(t *testing.T) {
 			}
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			runErr := Run(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
+			runErr := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
 			if ExitCode(runErr) != exitCodePolicyFailed {
 				t.Fatalf("exit=%d err=%v", ExitCode(runErr), runErr)
 			}

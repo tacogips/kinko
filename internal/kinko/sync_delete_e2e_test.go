@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestSyncPushPartialDeletePersistsExactAppliedPrefix(t *testing.T) {
+func TestLegacySyncEnginePushPartialDeletePersistsExactAppliedPrefix(t *testing.T) {
 	stub := buildStubBWS(t)
 	dataDir, configPath, dek := setupSyncE2EVault(t)
 	t.Setenv(envKinkoBWSAccessToken, "fixture-kinko-token")
 	t.Setenv(envKinkoBWSBin, stub.stateful)
 	args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--json"}
-	if err := Run(args, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("initial push failed: %v", err)
 	}
 
@@ -33,7 +33,7 @@ func TestSyncPushPartialDeletePersistsExactAppliedPrefix(t *testing.T) {
 
 	t.Setenv(envKinkoBWSBin, stub.partialDelete)
 	var stdout bytes.Buffer
-	runErr := Run(args, strings.NewReader("fixture-password\n"), &stdout, &bytes.Buffer{})
+	runErr := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &stdout, &bytes.Buffer{})
 	if ExitCode(runErr) != exitCodeProviderFailed {
 		t.Fatalf("partial-delete exit=%d err=%v", ExitCode(runErr), runErr)
 	}
@@ -83,7 +83,7 @@ func TestSyncPushPartialDeletePersistsExactAppliedPrefix(t *testing.T) {
 
 	t.Setenv(envKinkoBWSBin, stub.stateful)
 	stdout.Reset()
-	if err := Run(args, strings.NewReader("fixture-password\n"), &stdout, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("converging push failed: %v", err)
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {

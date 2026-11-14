@@ -37,11 +37,16 @@ Large features are split into multiple related plans with cross-references.
 
 ## Active Plans
 
+
 | Plan | Status | Design Reference | Last Updated |
 |------|--------|------------------|--------------|
 | _None_ | - | - | - |
 
 ## Completed Plans
+
+- [Security review remediation](completed/security-review-2026-11.md): Completed 2026-11-14.
+
+- [Missing secret exit status](completed/missing-secret-exit-status.md): Completed 2026-11-14.
 
 | Plan | Completed | Design Reference |
 |------|-----------|------------------|

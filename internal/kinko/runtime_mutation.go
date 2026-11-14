@@ -195,12 +195,13 @@ type setAssignment struct {
 func parseSetAssignment(raw string) (string, string, error) {
 	i := strings.Index(raw, "=")
 	if i <= 0 {
-		return "", "", fmt.Errorf("invalid assignment %q (expected KEY=VALUE)", raw)
+		return "", "", errors.New("invalid assignment (expected KEY=VALUE)")
 	}
 	key := strings.TrimSpace(raw[:i])
 	val := strings.TrimRight(raw[i+1:], "\r")
 	if err := validateEnvKey(key); err != nil {
-		return "", "", err
+		// A malformed key may itself contain plaintext secret input.
+		return "", "", errors.New("invalid environment key in assignment")
 	}
 	return key, val, nil
 }

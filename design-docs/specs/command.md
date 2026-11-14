@@ -542,6 +542,9 @@ Shared scope:
 Read one secret value from resolved profile/path scope.
 Default output is masked unless `--reveal` is explicitly set.
 
+If the key is absent from the resolved scope (including shared fallback), return
+exit status `1` and no value on stdout. A registered empty value is valid.
+
 ### `kinko show`
 
 Show grouped key-value entries for resolved profile/path scope (current dir + selected profile).
@@ -885,10 +888,17 @@ kinko import fish --file ./secrets.fish
 
 Run a child process with resolved secrets injected into environment variables without exporting to parent shell.
 
+Select secrets with `--all` or `--env KEY[,KEY...]`. If any key explicitly
+requested with `--env` is absent from the resolved secrets, return exit status
+`1` before starting the child, even if the parent environment contains that key.
+Registered empty values are valid. Local values take precedence over shared
+values, and shared values provide fallback.
+
 Examples:
 
 ```bash
-kinko exec --profile dev --path . -- go test ./...
+kinko --profile dev --path . exec --all -- go test ./...
+kinko exec --env API_KEY -- ./run-some.sh
 ```
 
 ### `kinko profile`

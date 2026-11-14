@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestSyncPushStubBWSEndToEnd(t *testing.T) {
+func TestLegacySyncEnginePushStubBWSEndToEnd(t *testing.T) {
 	stub := buildStubBWS(t)
 	dataDir, configPath, dek := setupSyncE2EVault(t)
 	vaultPath := filepath.Join(dataDir, "vault", "vault.v1.bin")
@@ -27,7 +27,7 @@ func TestSyncPushStubBWSEndToEnd(t *testing.T) {
 	base := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--json"}
 
 	var dryOut bytes.Buffer
-	if err := Run(append(base, "--dry-run"), strings.NewReader("fixture-password\n"), &dryOut, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(append(base, "--dry-run"), strings.NewReader("fixture-password\n"), &dryOut, &bytes.Buffer{}); err != nil {
 		t.Fatalf("dry-run failed: %v", err)
 	}
 	if !bytes.Equal(vaultBefore, mustReadSyncTestFile(t, vaultPath)) || !bytes.Equal(configBefore, mustReadSyncTestFile(t, configBlobPath)) {
@@ -40,7 +40,7 @@ func TestSyncPushStubBWSEndToEnd(t *testing.T) {
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer
-	if err := Run(base, strings.NewReader("fixture-password\n"), &out, &stderr); err != nil {
+	if err := runLegacySyncEngineFixture(base, strings.NewReader("fixture-password\n"), &out, &stderr); err != nil {
 		t.Fatalf("push failed: %v", err)
 	}
 	assertNoSyncFixtureLeak(t, out.String()+stderr.String())
@@ -66,7 +66,7 @@ func TestSyncPushStubBWSEndToEnd(t *testing.T) {
 	}
 	secondDir, secondConfig, secondDEK := setupEmptySyncE2EVault(t, meta.MachineID)
 	secondArgs := []string{"--kinko-dir", secondDir, "--config", secondConfig, cmdSync, cmdSyncPull, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--json"}
-	if err := Run(secondArgs, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(secondArgs, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("second-vault pull failed: %v", err)
 	}
 	secondData, err := loadVault(secondDir, secondDEK)
@@ -85,7 +85,7 @@ func TestSyncPushStubBWSEndToEnd(t *testing.T) {
 	if err := saveVault(dataDir, dek, data); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(base, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(base, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("stateful update failed: %v", err)
 	}
 	config, err = loadConfig(dataDir, dek)
@@ -112,7 +112,7 @@ func TestSyncPushStubBWSEndToEnd(t *testing.T) {
 	if err := saveVault(dataDir, dek, data); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(base, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(base, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("stateful deletion push failed: %v", err)
 	}
 	config, err = loadConfig(dataDir, dek)
@@ -142,22 +142,20 @@ func TestSyncPushStubBWSEndToEnd(t *testing.T) {
 	}
 	t.Setenv(envKinkoBWSBin, stub.stateful)
 	var conflictOut bytes.Buffer
-	err = Run(base, strings.NewReader("fixture-password\n"), &conflictOut, &bytes.Buffer{})
+	err = runLegacySyncEngineFixture(base, strings.NewReader("fixture-password\n"), &conflictOut, &bytes.Buffer{})
 	if ExitCode(err) != exitCodeSyncConflict {
 		t.Fatalf("conflict exit=%d err=%v", ExitCode(err), err)
 	}
 	assertNoSyncFixtureLeak(t, conflictOut.String())
 
 	forceArgs := append(append([]string{}, base...), "--force")
-	if err := Run(forceArgs, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(forceArgs, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("forced push failed: %v", err)
 	}
 }
 
-func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
-	stub := buildStubBWS(t)
+func TestSyncCLIValidation(t *testing.T) {
 	dataDir, configPath, _ := setupSyncE2EVault(t)
-	t.Setenv(envKinkoBWSAccessToken, "fixture-kinko-token")
 	base := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush}
 
 	t.Run("provider required", func(t *testing.T) {
@@ -184,9 +182,17 @@ func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
 			t.Fatalf("exit=%d", ExitCode(err))
 		}
 	})
+}
+
+func TestLegacySyncEngineProviderFailures(t *testing.T) {
+	stub := buildStubBWS(t)
+	dataDir, configPath, _ := setupSyncE2EVault(t)
+	t.Setenv(envKinkoBWSAccessToken, "fixture-kinko-token")
+	base := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush}
+
 	t.Run("garbage JSON", func(t *testing.T) {
 		t.Setenv(envKinkoBWSBin, stub.garbage)
-		err := Run(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
+		err := runLegacySyncEngineFixture(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
 		if ExitCode(err) != exitCodeProviderFailed {
 			t.Fatalf("exit=%d err=%v", ExitCode(err), err)
 		}
@@ -194,14 +200,14 @@ func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
 	})
 	t.Run("missing binary", func(t *testing.T) {
 		t.Setenv(envKinkoBWSBin, filepath.Join(t.TempDir(), "missing-bws"))
-		err := Run(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
+		err := runLegacySyncEngineFixture(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
 		if ExitCode(err) != exitCodeProviderFailed {
 			t.Fatalf("exit=%d err=%v", ExitCode(err), err)
 		}
 	})
 	t.Run("non-zero exit", func(t *testing.T) {
 		t.Setenv(envKinkoBWSBin, stub.nonzero)
-		err := Run(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
+		err := runLegacySyncEngineFixture(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
 		if ExitCode(err) != exitCodeProviderFailed {
 			t.Fatalf("exit=%d err=%v", ExitCode(err), err)
 		}
@@ -215,7 +221,7 @@ func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
 		previousTimeout := bwsCallTimeout
 		bwsCallTimeout = 20 * time.Millisecond
 		defer func() { bwsCallTimeout = previousTimeout }()
-		err := Run(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
+		err := runLegacySyncEngineFixture(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
 		if ExitCode(err) != exitCodeProviderFailed || !errors.Is(err, errBWSTimeout) {
 			t.Fatalf("exit=%d timeout error=%v", ExitCode(err), err)
 		}
@@ -261,7 +267,7 @@ func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
 		args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPull, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--force", "--json"}
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		runErr := Run(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
+		runErr := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
 		if ExitCode(runErr) != exitCodeProviderFailed || !errors.Is(runErr, errBWSInvalidJSON) {
 			t.Fatalf("exit=%d provider classification mismatch", ExitCode(runErr))
 		}
@@ -303,7 +309,7 @@ func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv(envKinkoBWSBin, stub.remote)
-		err = Run(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--force"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
+		err = runLegacySyncEngineFixture(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--force"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
 		if ExitCode(err) != exitCodePolicyFailed {
 			t.Fatalf("exit=%d err=%v", ExitCode(err), err)
 		}
@@ -340,7 +346,7 @@ func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
 		configBefore := mustReadSyncTestFile(t, configBlobPath)
 		t.Setenv(envKinkoBWSBin, stub.remote)
 		pullArgs := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPull, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--force"}
-		err = Run(pullArgs, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
+		err = runLegacySyncEngineFixture(pullArgs, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
 		if ExitCode(err) != exitCodePolicyFailed {
 			t.Fatalf("exit=%d err=%v", ExitCode(err), err)
 		}
@@ -389,7 +395,7 @@ func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
 				}
 				t.Setenv(envKinkoBWSBin, stub.remote)
 				args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPull, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--force"}
-				err = Run(args, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
+				err = runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
 				if ExitCode(err) != exitCodePolicyFailed {
 					t.Fatalf("exit=%d err=%v", ExitCode(err), err)
 				}
@@ -410,14 +416,14 @@ func TestSyncStubBWSProviderFailuresAndCLIValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv(envKinkoBWSBin, stub.remote)
-		err = Run(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--force"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
+		err = runLegacySyncEngineFixture(append(base, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--force"), strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{})
 		if ExitCode(err) != exitCodePolicyFailed {
 			t.Fatalf("exit=%d err=%v", ExitCode(err), err)
 		}
 	})
 }
 
-func TestSyncPullStubBWSCreatesAndDeletesWithSharedToken(t *testing.T) {
+func TestLegacySyncEnginePullStubBWSCreatesAndDeletesWithSharedToken(t *testing.T) {
 	dataDir, configPath, dek := setupSyncE2EVault(t)
 	meta, err := loadMeta(dataDir)
 	if err != nil {
@@ -442,7 +448,7 @@ func TestSyncPullStubBWSCreatesAndDeletesWithSharedToken(t *testing.T) {
 	vaultBefore := mustReadSyncTestFile(t, vaultPath)
 	configBefore := mustReadSyncTestFile(t, configBlobPath)
 	var dryRunOutput bytes.Buffer
-	if err := Run(append(base, "--dry-run"), strings.NewReader("fixture-password\n"), &dryRunOutput, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(append(base, "--dry-run"), strings.NewReader("fixture-password\n"), &dryRunOutput, &bytes.Buffer{}); err != nil {
 		t.Fatalf("pull dry-run failed: %v", err)
 	}
 	if !bytes.Equal(vaultBefore, mustReadSyncTestFile(t, vaultPath)) || !bytes.Equal(configBefore, mustReadSyncTestFile(t, configBlobPath)) {
@@ -450,7 +456,7 @@ func TestSyncPullStubBWSCreatesAndDeletesWithSharedToken(t *testing.T) {
 	}
 	assertNoSyncFixtureLeak(t, dryRunOutput.String())
 	var out bytes.Buffer
-	if err := Run(base, strings.NewReader("fixture-password\n"), &out, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(base, strings.NewReader("fixture-password\n"), &out, &bytes.Buffer{}); err != nil {
 		t.Fatalf("pull create failed: %v", err)
 	}
 	assertNoSyncFixtureLeak(t, out.String())
@@ -463,7 +469,7 @@ func TestSyncPullStubBWSCreatesAndDeletesWithSharedToken(t *testing.T) {
 	}
 
 	t.Setenv(envKinkoBWSBin, stub.success)
-	if err := Run(base, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	if err := runLegacySyncEngineFixture(base, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("pull delete failed: %v", err)
 	}
 	data, err = loadVault(dataDir, dek)
@@ -475,7 +481,7 @@ func TestSyncPullStubBWSCreatesAndDeletesWithSharedToken(t *testing.T) {
 	}
 }
 
-func TestSyncProjectMismatchWarningAndPartialPushPersistence(t *testing.T) {
+func TestLegacySyncEngineProjectMismatchWarningAndPartialPushPersistence(t *testing.T) {
 	t.Run("project mismatch warning", func(t *testing.T) {
 		stub := buildStubBWS(t)
 		dataDir, configPath, dek := setupSyncE2EVault(t)
@@ -500,7 +506,7 @@ func TestSyncProjectMismatchWarningAndPartialPushPersistence(t *testing.T) {
 		t.Setenv(envKinkoBWSAccessToken, "fixture-kinko-token")
 		args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush, "--provider", supportedSyncProvider, "--project-id", "current-project", "--dry-run"}
 		var stderr bytes.Buffer
-		if err := Run(args, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &stderr); err != nil {
+		if err := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &bytes.Buffer{}, &stderr); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(stderr.String(), "previous-project") || !strings.Contains(stderr.String(), "current-project") {
@@ -541,7 +547,7 @@ func TestSyncProjectMismatchWarningAndPartialPushPersistence(t *testing.T) {
 		args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPull, "--provider", supportedSyncProvider, "--project-id", "current-project", "--force", "--json"}
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		if err := Run(args, strings.NewReader("fixture-password\n"), &stdout, &stderr); err != nil {
+		if err := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &stdout, &stderr); err != nil {
 			t.Fatal(err)
 		}
 		after, err := loadVault(dataDir, dek)
@@ -576,7 +582,7 @@ func TestSyncProjectMismatchWarningAndPartialPushPersistence(t *testing.T) {
 		args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--json"}
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		runErr := Run(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
+		runErr := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
 		if ExitCode(runErr) != exitCodeProviderFailed {
 			t.Fatalf("exit=%d err=%v", ExitCode(runErr), runErr)
 		}
@@ -602,7 +608,7 @@ func TestSyncProjectMismatchWarningAndPartialPushPersistence(t *testing.T) {
 	})
 }
 
-func TestSyncWrongPasswordStopsBeforeProviderAndLeavesFilesUnchanged(t *testing.T) {
+func TestLegacySyncEngineWrongPasswordStopsBeforeProviderAndLeavesFilesUnchanged(t *testing.T) {
 	stub := buildStubBWS(t)
 	dataDir, configPath, _ := setupSyncE2EVault(t)
 	t.Setenv(envKinkoBWSBin, stub.stateful)
@@ -614,7 +620,7 @@ func TestSyncWrongPasswordStopsBeforeProviderAndLeavesFilesUnchanged(t *testing.
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--json"}
-	err := Run(args, strings.NewReader("wrong-password\n"), &stdout, &stderr)
+	err := runLegacySyncEngineFixture(args, strings.NewReader("wrong-password\n"), &stdout, &stderr)
 	if ExitCode(err) != exitCodeAuthFailed {
 		t.Fatalf("exit=%d err=%v", ExitCode(err), err)
 	}
@@ -632,7 +638,7 @@ func TestSyncWrongPasswordStopsBeforeProviderAndLeavesFilesUnchanged(t *testing.
 	}
 }
 
-func TestSyncMachineMismatchStateWarnsAndUsesNeverSyncedBaseline(t *testing.T) {
+func TestLegacySyncEngineMachineMismatchStateWarnsAndUsesNeverSyncedBaseline(t *testing.T) {
 	stub := buildStubBWS(t)
 	dataDir, configPath, dek := setupSyncE2EVault(t)
 	config, err := loadConfig(dataDir, dek)
@@ -663,7 +669,7 @@ func TestSyncMachineMismatchStateWarnsAndUsesNeverSyncedBaseline(t *testing.T) {
 	args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--dry-run", "--json"}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := Run(args, strings.NewReader("fixture-password\n"), &stdout, &stderr); err != nil {
+	if err := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	var result syncResult
@@ -679,7 +685,7 @@ func TestSyncMachineMismatchStateWarnsAndUsesNeverSyncedBaseline(t *testing.T) {
 	assertNoSyncFixtureLeak(t, stdout.String()+stderr.String())
 }
 
-func TestSyncPushPersistStateFailureReportsSummary(t *testing.T) {
+func TestLegacySyncEnginePushPersistStateFailureReportsSummary(t *testing.T) {
 	stub := buildStubBWS(t)
 	dataDir, configPath, dek := setupSyncE2EVault(t)
 	t.Setenv(envKinkoBWSBin, stub.success)
@@ -702,7 +708,7 @@ func TestSyncPushPersistStateFailureReportsSummary(t *testing.T) {
 	args := []string{"--kinko-dir", dataDir, "--config", configPath, cmdSync, cmdSyncPush, "--provider", supportedSyncProvider, "--project-id", "fixture-project", "--json"}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	runErr := Run(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
+	runErr := runLegacySyncEngineFixture(args, strings.NewReader("fixture-password\n"), &stdout, &stderr)
 	if ExitCode(runErr) != exitCodeIOFailed {
 		t.Fatalf("exit=%d err=%v", ExitCode(runErr), runErr)
 	}

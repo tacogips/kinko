@@ -392,19 +392,9 @@ func checkRestoreBootstrapPolicy(configPath string, includeBootstrap bool) error
 	return nil
 }
 
-// stageAndCommitRestoreFiles writes meta/vault/config/marker to
-// <dataDir>/vault/<name>.restore-tmp, renames each into place (the vault
-// marker last, as a hard design requirement so an interrupted restore never
-// leaves a directory other kinko commands treat as initialized), and on any
-// failure removes every staged and already-renamed restore output
-// (best-effort cleanup) before returning the original error.
-//
-// Plain os.WriteFile (rather than O_EXCL) is used for the ".restore-tmp"
-// staging files: these paths are always our own transient state, created and
-// cleaned up entirely within this function's scope, so O_EXCL's
-// already-exists protection would not add meaningful safety here and would
-// only complicate retry/cleanup semantics for a scenario (concurrent restore
-// into the same target) that acquireMutationLock already prevents.
+// stageAndCommitRestoreFiles writes vault files to exclusively created private
+// staging files and renames the marker last. On failure it removes only staging
+// files and final outputs created by this restore attempt.
 func stageAndCommitRestoreFiles(dataDir string, archive *validatedRestoreArchive) error {
 	vaultDir := filepath.Join(dataDir, "vault")
 
@@ -422,7 +412,6 @@ func stageAndCommitRestoreFiles(dataDir string, archive *validatedRestoreArchive
 
 	var tmpPathsWritten []string
 	var finalPathsRenamed []string
-
 	cleanup := func() {
 		for _, p := range tmpPathsWritten {
 			_ = os.Remove(p)
@@ -433,16 +422,16 @@ func stageAndCommitRestoreFiles(dataDir string, archive *validatedRestoreArchive
 	}
 
 	for _, sf := range staged {
-		tmpPath := filepath.Join(vaultDir, sf.finalName+restoreVaultTmpSuffix)
-		if err := os.WriteFile(tmpPath, sf.data, 0o600); err != nil {
+		tmpPath, err := writeRestoreStagingFile(vaultDir, sf.finalName, sf.data)
+		if err != nil {
 			cleanup()
 			return fmt.Errorf("stage restore file %s: %w", sf.finalName, err)
 		}
 		tmpPathsWritten = append(tmpPathsWritten, tmpPath)
 	}
 
-	for _, sf := range staged {
-		tmpPath := filepath.Join(vaultDir, sf.finalName+restoreVaultTmpSuffix)
+	for i, sf := range staged {
+		tmpPath := tmpPathsWritten[i]
 		finalPath := filepath.Join(vaultDir, sf.finalName)
 		if err := os.Rename(tmpPath, finalPath); err != nil {
 			cleanup()
@@ -452,6 +441,36 @@ func stageAndCommitRestoreFiles(dataDir string, archive *validatedRestoreArchive
 	}
 
 	return nil
+}
+
+// writeRestoreStagingFile never opens a pre-existing staging path.
+func writeRestoreStagingFile(dir, name string, data []byte) (string, error) {
+	f, err := os.CreateTemp(dir, name+".*"+restoreVaultTmpSuffix)
+	if err != nil {
+		return "", err
+	}
+	tmpPath := f.Name()
+	success := false
+	defer func() {
+		_ = f.Close()
+		if !success {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := f.Chmod(0o600); err != nil {
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	success = true
+	return tmpPath, nil
 }
 
 // writeRestoredBootstrapConfig writes archive.bootstrapBytes to configPath
