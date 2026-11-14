@@ -1,0 +1,13 @@
+{
+  "id": "design",
+  "description": "Verify and summarize the folder vault design.",
+  "nodeType": "command",
+  "variables": {},
+  "command": {
+    "scriptPath": "scripts/design.sh",
+    "workingDirectory": "../../.."
+  },
+  "output": {
+    "description": "JSON summary of the folder vault design evidence."
+  }
+}
