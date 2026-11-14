@@ -1,0 +1,3 @@
+interface:
+  display_name: "supply-chain-secure-install"
+  short_description: "Use when adding, updating, or auditing Go module dependencies. Provides supply chain attack countermeasures including go.sum verification, GOPROXY hardening, govulncheck auditing, and CI/CD pipeline security. Adapted from Shai-Hulud npm attack lessons."
