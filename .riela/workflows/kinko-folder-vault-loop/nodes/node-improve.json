@@ -1,0 +1,13 @@
+{
+  "id": "improve",
+  "description": "Verify final design improvements and implementation alignment.",
+  "nodeType": "command",
+  "variables": {},
+  "command": {
+    "scriptPath": "scripts/improve.sh",
+    "workingDirectory": "../../.."
+  },
+  "output": {
+    "description": "JSON final design improvement evidence."
+  }
+}
