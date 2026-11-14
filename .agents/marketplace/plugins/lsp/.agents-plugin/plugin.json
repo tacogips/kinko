@@ -1,0 +1,5 @@
+{
+  "name": "go-lsp",
+  "description": "Go language server (gopls) support for agent tooling",
+  "version": "1.0.0"
+}
