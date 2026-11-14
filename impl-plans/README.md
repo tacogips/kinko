@@ -1,0 +1,148 @@
+# Implementation Plans
+
+This directory contains implementation plans that translate design documents into actionable implementation specifications.
+
+## Purpose
+
+Implementation plans bridge design documents (what to build) and actual code (how to build). They provide:
+- Clear deliverables without code
+- Interface and function specifications
+- Dependency mapping for concurrent execution
+- Progress tracking across sessions
+
+## Directory Structure
+
+```
+impl-plans/
+├── README.md              # This file
+├── active/                # Currently active implementation plans
+│   └── <feature>.md       # One file per feature being implemented
+├── completed/             # Completed implementation plans (archive)
+│   └── <feature>.md       # Completed plans for reference
+└── templates/             # Plan templates
+    └── plan-template.md   # Standard plan template
+```
+
+## File Size Limits
+
+**IMPORTANT**: Implementation plan files must stay under 400 lines to prevent OOM errors.
+
+| Metric | Limit |
+|--------|-------|
+| Line count | MAX 400 lines |
+| Modules per plan | MAX 8 modules |
+| Tasks per plan | MAX 10 tasks |
+
+Large features are split into multiple related plans with cross-references.
+
+## Active Plans
+
+| Plan | Status | Design Reference | Last Updated |
+|------|--------|------------------|--------------|
+| _None_ | - | - | - |
+
+## Completed Plans
+
+| Plan | Completed | Design Reference |
+|------|-----------|------------------|
+| `hook-environment-lifecycle.md` | 2026-08-10 | `design-docs/specs/command.md#kinko-hook-enterleave-shell` |
+| `bws-sync-completion-file-splits.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#providerpayload-and-testing-boundaries` |
+| `bws-sync-completion-provider-config.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#bws-configuration-diagnostics-and-version-gates` |
+| `bws-sync-completion-state-selection.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#compatibility-and-state-format-rules` |
+| `bws-sync-completion-planning.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#granular-conflict-rules` |
+| `bws-sync-completion-checkpoint-execution.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#bounded-retry-progress-and-resume` |
+| `bws-sync-completion-bootstrap.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#cross-machine-bootstrap-and-disaster-recovery` |
+| `bws-sync-completion-maintenance.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#status-reset-reconcile-and-prune` |
+| `bws-sync-completion-cli-doctor.md` | 2026-08-05 | `design-docs/specs/command.md#kinko-sync-with-bws` |
+| `bws-sync-completion-verification.md` | 2026-08-05 | `design-docs/specs/design-bws-sync.md#providerpayload-and-testing-boundaries` |
+| `permanent-unlock.md` | 2026-08-05 | `design-docs/specs/command.md#kinko-unlock`, `design-docs/specs/architecture.md#lockunlock-session-model` |
+| `bws-sync-foundation.md` | 2026-07-13 | `design-docs/specs/design-bws-sync.md` |
+| `bws-sync-command.md` | 2026-07-13 | `design-docs/specs/design-bws-sync.md` |
+| `kinko-restore.md` | 2026-07-13 | `design-docs/specs/design-restore.md` |
+| `p4-ux-diagnostics-maintainability.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `spec-command-reconciliation.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `crypto-session-hardening.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `folder-backup-explosion-lifecycle.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `module-path-and-cli-contracts.md` | 2026-07-03 | `design-docs/specs/design-review-findings-2026-07.md#6-prioritized-remediation-plan-inputs` |
+| `kinko-folder-vault.md` | 2026-06-23 | `design-docs/specs/architecture.md#folder-vault-architecture`, `design-docs/specs/command.md#kinko-folder` |
+| `release-diff-remediation.md` | 2026-06-17 | `design-docs/specs/notes.md#release-diff-remediation-notes` |
+| `copy-values-between-scopes.md` | 2026-06-16 | `design-docs/specs/command.md#kinko-copy-local-to-local---from-path-dir-key`, `design-docs/specs/command.md#kinko-copy-local-to-shared-key`, `design-docs/specs/command.md#kinko-copy-shared-to-local-key` |
+| `move-values-between-scopes.md` | 2026-06-16 | `design-docs/specs/command.md#kinko-move-local-to-shared-key`, `design-docs/specs/command.md#kinko-move-shared-to-local-key`, `design-docs/specs/architecture.md#kinko-move-local-to-shared-key--kinko-move-shared-to-local-key`, `design-docs/specs/design-shared-keys.md#movement-between-local-and-shared-scopes` |
+| `path-prune-missing.md` | 2026-06-16 | `design-docs/specs/command.md#kinko-path-prune-missing`, `design-docs/specs/architecture.md#kinko-path-prune-missing` |
+| `require-password-cross-scope-show.md` | 2026-05-22 | `design-docs/specs/design-show-all-scopes.md#security-and-guardrails` |
+| `move-delete-all-password-prompt-after-confirmation.md` | 2026-05-23 | `design-docs/specs/architecture.md#kinko-delete---all`, `design-docs/specs/command.md#kinko-delete-key` |
+| `kinko-backup.md` | 2026-03-08 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |
+| `password-change-policy-alignment.md` | 2026-03-08 | `design-docs/specs/design-password-change.md` |
+| `require-password-before-delete-all.md` | 2026-05-22 | `design-docs/specs/architecture.md#kinko-delete---all`, `design-docs/specs/command.md#kinko-delete-key` |
+| `kinko-secure-runtime-mvp.md` | 2026-03-02 | `design-docs/specs/command.md`, `design-docs/specs/architecture.md` |
+| `cli-command-source-of-truth.md` | 2026-04-05 | `design-docs/specs/command.md#cli-metadata-source-of-truth` |
+| `explicit-cli-surface.md` | 2026-04-05 | `design-docs/specs/command.md#cli-metadata-source-of-truth` |
+| `profile-list.md` | 2026-04-05 | `design-docs/specs/command.md#kinko-profile` |
+
+## Phase Dependencies (for impl-exec-auto)
+
+**IMPORTANT**: This section is used by impl-exec-auto to determine which plans to load.
+Only plans from eligible phases should be read to minimize context loading.
+
+### Phase Status
+
+| Phase | Status | Depends On |
+|-------|--------|------------|
+| 1 | COMPLETED | - |
+| 2 | COMPLETED | Phase 1 |
+| 3 | COMPLETED | Phase 2 |
+| 4 | COMPLETED | Phase 3 |
+| 5 | COMPLETED | Phase 4 |
+| 6 | COMPLETED | Phase 5 |
+| 7 | COMPLETED | Phase 6 |
+
+### Phase to Plans Mapping
+
+```
+PHASE_TO_PLANS = {
+  1: [],
+  2: [],
+  3: [],
+  4: [],
+  5: [],
+  6: [],
+  7: []
+}
+```
+
+## Workflow
+
+### Creating a New Plan
+
+1. Use the `/impl-plan` command with a design document reference
+2. Or manually create a plan using `templates/plan-template.md`
+3. Save to `active/<feature-name>.md`
+4. Update this README with the new plan entry
+5. **IMPORTANT**: If plan exceeds 400 lines, split into multiple files
+
+### Working on a Plan
+
+1. Read the active plan
+2. Select a subtask to work on (consider parallelization)
+3. Implement following the deliverable specifications
+4. Update task status and progress log
+5. Mark completion criteria as done
+
+For every Go implementation task, invoke the repository's `go-coding` agent;
+after any Go file modification, invoke `check-and-test-after-modify` before
+updating the plan progress log.
+
+### Completing a Plan
+
+1. Verify all completion criteria are met
+2. Update status to "Completed"
+3. Move file from `active/` to `completed/`
+4. Update this README
+
+## Guidelines
+
+- Plans contain NO implementation code
+- Plans specify interfaces, functions, and file structures
+- Subtasks should be as independent as possible for parallel execution
+- Always update progress log after each session
+- **Keep each plan file under 400 lines** - split if necessary
