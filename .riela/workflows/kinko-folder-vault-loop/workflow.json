@@ -1,0 +1,50 @@
+{
+  "workflowId": "kinko-folder-vault-loop",
+  "description": "Design, review, and improve the macOS-only kinko folder vault release boundary.",
+  "defaults": {
+    "maxLoopIterations": 3,
+    "nodeTimeoutMs": 900000
+  },
+  "entryStepId": "design",
+  "nodes": [
+    {
+      "id": "design",
+      "nodeFile": "nodes/node-design.json"
+    },
+    {
+      "id": "review",
+      "nodeFile": "nodes/node-review.json"
+    },
+    {
+      "id": "improve",
+      "nodeFile": "nodes/node-improve.json"
+    }
+  ],
+  "steps": [
+    {
+      "id": "design",
+      "nodeId": "design",
+      "role": "worker",
+      "transitions": [
+        {
+          "toStepId": "review"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "nodeId": "review",
+      "role": "worker",
+      "transitions": [
+        {
+          "toStepId": "improve"
+        }
+      ]
+    },
+    {
+      "id": "improve",
+      "nodeId": "improve",
+      "role": "worker"
+    }
+  ]
+}
